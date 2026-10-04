@@ -1,0 +1,111 @@
+# Đường dẫn: ưu tiên biến môi trường MIR_DATA_DIR, MIR_WORK_DIR; nếu không có thì dùng giá trị dưới đây.
+paths:
+  data_dir: "E:/Medical Retrieval"      # chứa Data/ và out/
+  work_dir: "E:/Medical Retrieval"      # nơi ghi sample/, corpus_clean/, chunks/, emb/, runs/, results/
+  queries: "Data/query.parquet"
+  links: "Data/links_corpus.parquet"
+  crawl_dir: "out"                       # có thể chứa part-*.jsonl.gz trực tiếp hoặc trong thư mục con theo shard
+
+seed: 42
+
+sample:                                  # T0
+  n_docs: 2000
+  n_queries: 50
+  min_per_host: 5                        # mỗi tên miền có ít nhất chừng này bài (nếu có đủ)
+  dir: "sample"
+
+clean:                                   # T1
+  repeat_line_ratio: 0.30                # dòng xuất hiện ở >= 30% số bài của nhóm → dòng giao diện
+  min_group_docs: 50                     # nhóm ít bài hơn: không lọc dòng lặp (thống kê không đáng tin)
+  min_docs_for_stats: 2000               # cảnh báo nếu nhóm có ít bài hơn số này
+  max_stats_docs: 5000                   # thống kê trên mẫu ngẫu nhiên tối đa chừng này bài mỗi nhóm
+  min_chars: 100                         # bài còn ít hơn sau khi làm sạch → bỏ
+  heading:                               # dòng lặp nhưng là tiêu đề mục (vd 治疗, Nguyên nhân) → giữ
+    max_len: 20                          #   dòng ngắn
+    min_followed_by_content: 0.6         #   >= 60% số lần xuất hiện, dòng ngay sau là nội dung (>= 20 ký tự, không lặp)
+    max_at_end: 0.3                      #   <= 30% số lần nằm ở 2 dòng cuối bài
+    max_at_start: 0.5                    #   <= 50% số lần là dòng đầu tiên của bài (dòng giao diện đầu trang)
+  groups:                                # gộp tên miền con dùng chung giao diện thành một nhóm thống kê
+    - {suffix: "39.net", exclude: ["ask.39.net", "jbk.39.net"], name: "39.net (kênh tin)"}
+  force_drop:                            # {nhóm: [dòng, ...]} — luôn bỏ (đã duyệt 4/10/2026)
+    nhathuoclongchau.com.vn: ["Xem thêm:"]
+    laodong.vn: ["Bình luận:", "Bạn nghĩ gì về nội dung này?", "Bạn cần đăng nhập để gửi bình luận.", "Gửi bình luận"]
+    thanhnien.vn: ["tin liên quan"]
+    suckhoedoisong.vn: ["Xem thêm video đang được quan tâm:", "Mời quý vị và các bạn đón xem video dưới đây:"]
+    suckhoecongdongonline.vn: ["Bài liên quan"]
+  force_keep: {}                         # {nhóm: [dòng, ...]} — luôn giữ (sau khi duyệt)
+  lines_file: "clean_lines.json"         # danh sách dòng bị loại (kết quả --stats, đầu vào --apply)
+  out_dir: "corpus_clean"
+  part_size: 200000                      # số bài mỗi file corpus_clean/part-*.parquet
+
+chunk:                                   # T2 — độ dài tính bằng token BGE-M3 (không tính <s></s>)
+  strategy: structure                    # chiến lược cho toàn kho: recursive | structure | parent_child
+  tokenizer: "BAAI/bge-m3"               # id trên Hugging Face hoặc đường dẫn tới tokenizer.json
+  max_tokens: 400                        # recursive, structure. T3 mã hoá "tiêu đề\nđoạn" với max_length 512 → chừa ~110 token cho tiêu đề
+  min_tokens: 40                         # đoạn cuối bài ngắn hơn → gộp vào đoạn trước nếu không vượt max_tokens
+  overlap_tokens: 0                      # chồng lấn (recursive và đoạn con của parent_child); bản đầu = 0
+  parent_child:
+    parent_max_tokens: 480               # đoạn cha (= đơn vị nộp bài, xếp hạng lại) — chia theo structure
+    child_max_tokens: 128                # đoạn con (= đơn vị tìm kiếm) — chia recursive trong từng đoạn cha
+  out_dir: "chunks"                      # chunks/<strategy>/part-*.parquet (+ parents-*.parquet cho parent_child)
+
+encode:                                  # T3 — BGE-M3: dense (CLS, chuẩn hoá) + lexical weights (sparse); ColBERT để T6
+  model: "BAAI/bge-m3"                   # id Hugging Face hoặc thư mục chứa model + sparse_linear.pt
+  max_length: 512                        # tính cả <s></s>; đầu vào = tiêu đề + "\n" + đoạn
+  fp16: true                             # chỉ áp dụng trên GPU
+  batch_tokens: 16384                    # tổng số token (sau đệm) mỗi batch; giảm nếu hết bộ nhớ GPU
+  max_batch: 128
+  shard_size: 100000                     # số đoạn mỗi emb/<strategy>/shard-XXXX (đơn vị chia việc và chạy lại)
+  sparse_min_weight: 0.0                 # bỏ trọng số <= ngưỡng này (0 = giữ mọi trọng số > 0)
+  out_dir: "emb"                         # emb/<strategy>/shard-XXXX/{dense.npy, sparse.npz, chunk_ids.parquet, _DONE.json}
+
+index:                                   # T4 — index/<strategy>/{dense.faiss, dense_ids.parquet, lsr/, bm25/}
+  out_dir: "index"
+  dense:
+    flat_below: 200000                   # ít đoạn hơn → IndexFlatIP (chính xác); nhiều hơn → IVF + SQ8
+    nlist: 16384                         # chọn bằng `python -m mir.index dense-tune` (Recall@100 so với Flat)
+    nprobe: 64
+    train_size: 500000                   # số vector dùng huấn luyện IVF
+  tune:                                  # đo trên mẫu ~100k đoạn, truy vấn = câu hỏi thật (nếu có) hoặc đoạn giữ lại
+    sample: 100000
+    nlists: [256, 1024, 4096]
+    nprobes: [4, 8, 16, 32, 64, 128]
+    n_queries: 1000
+    k: 100
+
+bm25:                                    # T4 — BM25 Lucene (cùng công thức bm25s), thống kê toàn cục, chia shard
+  k1: 1.5
+  b: 0.75
+  tokenize_workers: 4                    # số tiến trình tách từ (pyvi / jieba)
+
+retrieve:                                # T5
+  queries: "Data/query.parquet"          # tương đối với data_dir
+  depth: 1000
+  query_batch: 64
+  out_dir: "runs"                        # runs/<strategy>_<nhánh>.parquet
+
+fuse:                                    # T5
+  rrf_k: 60
+  configs: {A: [dense], B: [lsr], C: [bm25], D: [dense, lsr], E: [dense, bm25], F: [lsr, bm25], G: [dense, lsr, bm25]}
+  weighted:                              # tuỳ chọn: α·Dense + β·LSR + γ·BM25 (điểm chuẩn hoá min-max theo câu hỏi)
+    - [0.4, 0.3, 0.3]
+    - [0.5, 0.25, 0.25]
+    - [0.34, 0.33, 0.33]
+
+rerank:                                  # T6 — ColBERT (multi-vector) của BGE-M3, chỉ trên top-N ứng viên
+  top_n: 100
+  unit: chunk                            # chunk | parent (parent_child: tìm bằng đoạn con, xếp hạng & nộp đoạn cha)
+  query_max_length: 512
+  doc_max_length: 512
+  batch_tokens: 16384
+
+eval:                                    # T7
+  qrels: null                            # qrels.parquet (qid, doc_id, chunk_text) — CHƯA có nhãn thật
+  ks: [10, 50, 100, 500]
+  match: overlap                         # cách so chunk_text: exact | contains | overlap
+  overlap_threshold: 0.8                 # overlap: tỷ lệ ký tự của đoạn đúng được đoạn trả về phủ
+
+submit:                                  # T8
+  k_doc: 10                              # GIÁ TRỊ TẠM, chưa kiểm chứng
+  k_chunk: 10                            # GIÁ TRỊ TẠM, chưa kiểm chứng
+  out_dir: "submissions"

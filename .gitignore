@@ -1,0 +1,30 @@
+# Dữ liệu BTC và mọi kết quả sinh ra (lớn, tạo lại được bằng lệnh trong README)
+Data/
+out/
+out_*/
+sample/
+corpus_clean/
+chunks/
+emb/
+index/
+qemb/
+runs/
+submissions/
+crawl_eval/html/
+crawl_eval/report/
+crawl_eval/index.jsonl
+*.parquet
+*.npz
+*.npy
+*.faiss
+*.jsonl.gz
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Gói tải lên Kaggle (tạo lại được)
+kaggle/
