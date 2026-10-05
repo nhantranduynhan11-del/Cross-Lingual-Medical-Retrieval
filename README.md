@@ -1,7 +1,7 @@
 # ViBioMIR baseline v1 — truy hồi tài liệu y khoa đa ngôn ngữ (AI GURU 2026, Stage 3)
 
 Đầu vào là câu hỏi y khoa tiếng Việt. Hệ thống trả về tài liệu và đoạn nội dung liên quan, bằng tiếng Việt hoặc tiếng
-Trung. Bài nộp được chấm bằng F2 macro ở hai cấp: tài liệu và đoạn. Đề bài: [`docs/de_bai.md`](docs/de_bai.md).
+Trung. Bài nộp được chấm bằng F2 macro ở hai cấp: tài liệu và đoạn.
 
 ```
 crawl.py ─► out/ ─T0─► sample/ ─T1─► corpus_clean/ ─T2─► chunks/structure/ ─T3 (GPU)─► emb/structure/shard-XXXX/
@@ -11,11 +11,6 @@ crawl.py ─► out/ ─T0─► sample/ ─T1─► corpus_clean/ ─T2─► c
                                                                          ─► T6: ColBERT top-100 ─► T8: bài nộp (.zip)
                                                                          ─► T7: đánh giá (cần nhãn)
 ```
-
-Tài liệu khác:
-- [`docs/NOTES.md`](docs/NOTES.md): mọi quyết định, tham số và số đo.
-- [`docs/t7_danh_gia.md`](docs/t7_danh_gia.md): việc T7 (tập nhãn và đánh giá).
-- [`docs/HANDOFF.md`](docs/HANDOFF.md): trạng thái gần nhất.
 
 ## Mục lục
 
@@ -37,9 +32,7 @@ Tài liệu khác:
 | `configs/baseline.yaml` | Mọi tham số, có chú thích. |
 | `notebooks/` | 5 notebook Kaggle. Các notebook chỉ gọi lại lệnh `mir`. |
 | `tools/pack_kaggle.py` | Đóng gói dataset `mir-code` / `mir-data` để tải lên Kaggle. |
-| `tests/` | Kiểm thử, chạy trên CPU. |
 | `results/` | Báo cáo T0–T2 và kết quả T1; sinh ra khi chạy lệnh, không có trong git. |
-| `docs/` | Đề bài, đặc tả gốc (`BUILD_PROMPT.md`), `NOTES.md`, `HANDOFF.md`, `t7_danh_gia.md`. |
 
 Dữ liệu không nằm trong git. Các thư mục sau được tạo khi chạy lệnh:
 - `Data/`: dữ liệu BTC.
@@ -84,16 +77,6 @@ trùng SHA-256 với bản nhóm đang dùng (kiểm ngày 05/10/2026).
 py -c "from huggingface_hub import hf_hub_download as d; [d('AIGuruTinix/ViBioMIR', f, repo_type='dataset', local_dir='Data') for f in ('query.parquet', 'links_corpus.parquet')]"
 ```
 
-### 2.4. Kiểm tra cài đặt
-
-```powershell
-py -m pytest -q tests
-```
-
-Trên máy người duyệt: 65 bài qua trong khoảng 1–2 phút.
-- Lần đầu chạy cần mạng để tải tokenizer BGE-M3 (khoảng 17 MB). Trọng số model không tải về máy.
-- Một số bài tự bỏ qua nếu máy thiếu `sample/`, `Data/` hoặc `crawl_eval/html/`, vì các thư mục này không có trong git.
-
 **Đường dẫn.** Mặc định mọi thứ nằm trong thư mục repo (mục `paths` của `configs/baseline.yaml`). Muốn đặt dữ liệu ở
 ổ khác thì đặt hai biến môi trường:
 - `MIR_DATA_DIR`: thư mục chứa `Data/` và `out/`;
@@ -116,8 +99,8 @@ py crawl.py --out out --shard i/3 --save-raw --redo-stale --skip-hosts familydoc
 - `--save-raw`: lưu HTML gọn vào `out/raw/`. Khi sửa quy tắc trích chữ, chỉ cần chạy
   `py crawl.py --out out --reextract stale`, không phải tải lại.
 - `--redo-stale`: tải lại các bài đã trích bằng quy tắc cũ.
-- `--skip-hosts`: bỏ hai tên miền chặn crawl (khoảng 690k URL). Danh sách tên miền không lấy được ghi ở
-  `docs/NOTES.md`.
+- `--skip-hosts`: bỏ hai tên miền chặn crawl (khoảng 690k URL). Hai tên miền này trả 403 hoặc đòi
+  xác minh Cloudflare.
 
 Trong khi crawl:
 - Có thể dừng bất cứ lúc nào bằng Ctrl+C. Chạy lại **đúng lệnh cũ** để tiếp tục từ chỗ dừng.
@@ -261,7 +244,7 @@ thêm vào. Nếu panel *Input* báo có bản mới thì bấm cập nhật. Ô
 - **T4 BM25:** chạy trên CPU nên không tốn hạn mức GPU; chạy song song với T3 được.
 - **T5:**
   1. Chạy tương tác ô (1)–(3), đọc bảng Recall@100 của `dense-tune`.
-  2. Đặt `NLIST`/`NPROBE` ở ô (4). Ghi bảng vào `docs/NOTES.md`.
+  2. Đặt `NLIST`/`NPROBE` ở ô (4). Lưu lại bảng này.
   3. Đặt `RUN_TUNE = False` rồi *Save & Run All*.
   4. Nếu ô (1) hoặc lệnh dựng chỉ mục báo `[CẢNH BÁO] thiếu N khối emb` thì chưa đủ 3 dataset `mir-emb-m*`.
 - **T6–T8:**
@@ -288,8 +271,6 @@ Giới hạn: tối đa 10 bài/ngày. Ở vòng riêng (Private Phase), mỗi n
 | 4. T4 dense + T5 | Kaggle GPU T4 | 1 người | `mir-runs` | 5 |
 | 5. T6–T8 | Kaggle GPU T4 ×2 | 1 người | `submissions/*.zip` → leaderboard | — |
 | T7. Tập nhãn, đánh giá | máy cá nhân (+ Kaggle) | 1 người, **bắt đầu ngay** | `eval/`, `results/exp_*.md` | chọn `k_doc`, `k_chunk` |
-
-Chi tiết việc T7: [`docs/t7_danh_gia.md`](docs/t7_danh_gia.md).
 
 ## 6. Lệnh từng bước
 
@@ -321,7 +302,7 @@ khi đó tìm bằng đoạn con, còn xếp hạng lại và nộp bằng đo�
 | `emb/<strategy>/shard-XXXX/` | `dense.npy` (float16, đã chuẩn hoá), `sparse.npz` (CSR float16, đọc bằng `mir.encode.load_sparse`), `chunk_ids.parquet`, `_DONE.json` (kèm dấu vân tay `chunks_fp` của bản chunks) |
 | `index/<strategy>/` | `dense.faiss` + `dense_ids.parquet`; `bm25/shard-*.npz` (CSC) + `vocab.parquet` + `stats.json`; `lsr/` (tuỳ chọn) |
 | `runs/<tên>.parquet` | `qid`, `chunk_id`, `doc_id`, `rank`, `score` (+ `<tên>.json` cấu hình) |
-| `qrels.parquet` | `qid`, `doc_id`, `chunk_text` (có thể rỗng). Xem thêm định dạng nhãn ở `docs/t7_danh_gia.md`. |
+| `qrels.parquet` | `qid`, `doc_id`, `chunk_text` (có thể rỗng). |
 | `submissions/<tên>.zip` | đúng 1 file `<tên>.json` ở gốc |
 
 ## 8. Lỗi thường gặp
