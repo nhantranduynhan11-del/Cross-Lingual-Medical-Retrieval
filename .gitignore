@@ -28,3 +28,7 @@ __pycache__/
 
 # Gói tải lên Kaggle (tạo lại được)
 kaggle/
+
+# Công cụ kiểm chứng và báo cáo chạy cục bộ (không đưa lên repo)
+crawl_eval/
+results/

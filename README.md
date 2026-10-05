@@ -16,7 +16,6 @@ Tài liệu khác:
 - [`docs/NOTES.md`](docs/NOTES.md): mọi quyết định, tham số và số đo.
 - [`docs/t7_danh_gia.md`](docs/t7_danh_gia.md): việc T7 (tập nhãn và đánh giá).
 - [`docs/HANDOFF.md`](docs/HANDOFF.md): trạng thái gần nhất.
-- [`crawl_eval/README.md`](crawl_eval/README.md): kiểm chứng bộ trích chữ của `crawl.py`.
 
 ## Mục lục
 
@@ -39,8 +38,7 @@ Tài liệu khác:
 | `notebooks/` | 5 notebook Kaggle. Các notebook chỉ gọi lại lệnh `mir`. |
 | `tools/pack_kaggle.py` | Đóng gói dataset `mir-code` / `mir-data` để tải lên Kaggle. |
 | `tests/` | Kiểm thử, chạy trên CPU. |
-| `crawl_eval/` | Công cụ kiểm chứng bộ trích chữ của `crawl.py`. |
-| `results/` | Báo cáo T0–T2 và `clean_lines.json` (danh sách dòng bị loại ở T1, đã duyệt). |
+| `results/` | Báo cáo T0–T2 và kết quả T1; sinh ra khi chạy lệnh, không có trong git. |
 | `docs/` | Đề bài, đặc tả gốc (`BUILD_PROMPT.md`), `NOTES.md`, `HANDOFF.md`, `t7_danh_gia.md`. |
 
 Dữ liệu không nằm trong git. Các thư mục sau được tạo khi chạy lệnh:
@@ -144,7 +142,7 @@ py -m mir.survey --config configs/baseline.yaml                    # T0 → resu
 py -m mir.clean --config configs/baseline.yaml --stats --force     # T1 bước 1 → results/clean_lines.json, results/t1_review.md
 ```
 
-`--force` thay danh sách cũ. `results/clean_lines.json` hiện có là bản đã duyệt trên 10k URL đầu tiên; với kho đầy đủ
+`--force` thay danh sách cũ. `results/clean_lines.json` chỉ có trên máy người duyệt (không có trong git); với kho đầy đủ
 phải tính lại và duyệt lại.
 
 **Dừng lại và duyệt** `results/t1_review.md`: đây là các dòng giao diện lặp lại sẽ bị xoá ở 6 tên miền lớn nhất.
