@@ -9,7 +9,6 @@ trong nhánh nào thì điểm nhánh đó = 0.
 """
 import argparse
 import sys
-from pathlib import Path
 
 import pandas as pd
 
@@ -55,7 +54,7 @@ def main():
     cfg = config.load(a.config)
     fc, depth = cfg["fuse"], cfg["retrieve"]["depth"]
     strategy = a.strategy or cfg["chunk"]["strategy"]
-    rdir = Path(a.runs) if a.runs else cfg.work_dir / cfg["retrieve"]["out_dir"]
+    rdir = cfg.path("runs", override=a.runs)
     have = {b: runs.read(rdir / f"{strategy}_{b}.parquet") for b in BRANCHES if (rdir / f"{strategy}_{b}.parquet").exists()}
     print(f"nhánh có sẵn: {sorted(have)}")
     for name, brs in fc["configs"].items():

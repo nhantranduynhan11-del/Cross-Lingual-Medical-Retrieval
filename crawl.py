@@ -1170,9 +1170,10 @@ async def probe_async(a):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--input", default=r"E:\Medical Retrieval\Data\links_corpus.parquet")
+    p.add_argument("--input", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data",
+                                                   "links_corpus.parquet"))
     p.add_argument("--out", default="out")
-    p.add_argument("--shard", default="0/1", help="i/N: chỉ lấy id % N == i (chia việc cho nhiều máy)")
+    p.add_argument("--shard", default="0/1", help="i/N: chỉ lấy id %% N == i (chia việc cho nhiều máy)")
     p.add_argument("--limit", type=int, default=0, help="chỉ crawl ngẫu nhiên N URL để chạy thử")
     p.add_argument("--concurrency", type=int, default=64, help="tổng số kết nối đồng thời")
     p.add_argument("--per-host", type=int, default=2, help="kết nối đồng thời / tên miền nhỏ")

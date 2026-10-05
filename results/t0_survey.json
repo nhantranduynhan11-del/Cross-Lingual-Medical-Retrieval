@@ -1,0 +1,390 @@
+{
+ "n_part_files": 1,
+ "n_docs": 9633,
+ "lang": {
+  "vi": 1967,
+  "zh": 7666
+ },
+ "hosts": {
+  "www.cnkang.com": 2547,
+  "www.120ask.com": 2436,
+  "ask.39.net": 917,
+  "www.a-hospital.com": 448,
+  "suckhoecongdongonline.vn": 425,
+  "zhongyibaodian.net": 383,
+  "nhathuoclongchau.com.vn": 247,
+  "suckhoedoisong.vn": 233,
+  "thanhnien.vn": 191,
+  "www.zydcd.com": 132,
+  "www.wujue.com": 121,
+  "www.youlai.cn": 84,
+  "laodong.vn": 81,
+  "baby.39.net": 77,
+  "medlatec.vn": 72,
+  "phunusuckhoe.giadinhonline.vn": 71,
+  "www.vinmec.com": 58,
+  "qihuangzhishu.com": 53,
+  "care.39.net": 47,
+  "jbk.39.net": 44,
+  "test.pmphai.com": 44,
+  "baocantho.com.vn": 40,
+  "tiemchunglongchau.com.vn": 40,
+  "giadinhonline.vn": 39,
+  "food.39.net": 39,
+  "baonghean.vn": 38,
+  "baodanang.vn": 36,
+  "hellobacsi.com": 35,
+  "fitness.39.net": 35,
+  "vietnamnet.vn": 34,
+  "baohaiphong.vn": 33,
+  "woman.39.net": 32,
+  "fk.39.net": 29,
+  "vov.vn": 26,
+  "baoangiang.com.vn": 25,
+  "wei.39.net": 25,
+  "youmed.vn": 23,
+  "khoahocphothong.vn": 20,
+  "jb39.com": 19,
+  "nk.39.net": 19,
+  "suckhoeviet.org.vn": 18,
+  "man.39.net": 17,
+  "baoquangtri.vn": 16,
+  "tnb.39.net": 15,
+  "cancer.39.net": 15,
+  "vov2.vov.vn": 14,
+  "nhandan.vn": 14,
+  "www.msdmanuals.cn": 14,
+  "baovinhlong.com.vn": 13,
+  "tuoitre.vn": 12,
+  "phuyen.baodaklak.vn": 12,
+  "bachmai.gov.vn": 12,
+  "www.baidu.com": 12,
+  "gan.39.net": 12,
+  "www.vietnamplus.vn": 11,
+  "dantri.com.vn": 10,
+  "tamanhhospital.vn": 10,
+  "shen.39.net": 9,
+  "heart.39.net": 9,
+  "baogialai.com.vn": 8,
+  "gc.39.net": 8,
+  "baochinhphu.vn": 7,
+  "vnexpress.net": 7,
+  "www.qdnd.vn": 7,
+  "ek.39.net": 7,
+  "pf.39.net": 6,
+  "tienphong.vn": 5,
+  "health.people.com.cn": 5,
+  "www.sggp.org.vn": 4,
+  "baoquangninh.vn": 4,
+  "gk.39.net": 4,
+  "benhviennhitrunguong.gov.vn": 3,
+  "thaythuocvietnam.vn": 3,
+  "baotayninh.vn": 3,
+  "baolangson.vn": 3,
+  "hanoimoi.vn": 2,
+  "baophutho.vn": 1,
+  "www.familydoctor.cn": 1,
+  "benhvienvietduc.org": 1,
+  "byby.39.net": 1
+ },
+ "host_lang": {
+  "baohaiphong.vn": {
+   "vi": 33
+  },
+  "laodong.vn": {
+   "vi": 81
+  },
+  "www.vinmec.com": {
+   "vi": 58
+  },
+  "medlatec.vn": {
+   "vi": 72
+  },
+  "vov.vn": {
+   "vi": 26
+  },
+  "thanhnien.vn": {
+   "vi": 191
+  },
+  "benhviennhitrunguong.gov.vn": {
+   "vi": 3
+  },
+  "www.a-hospital.com": {
+   "zh": 448
+  },
+  "suckhoedoisong.vn": {
+   "vi": 233
+  },
+  "www.youlai.cn": {
+   "zh": 84
+  },
+  "baonghean.vn": {
+   "vi": 38
+  },
+  "www.zydcd.com": {
+   "zh": 132
+  },
+  "vov2.vov.vn": {
+   "vi": 14
+  },
+  "phunusuckhoe.giadinhonline.vn": {
+   "vi": 71
+  },
+  "baodanang.vn": {
+   "vi": 36
+  },
+  "tuoitre.vn": {
+   "vi": 12
+  },
+  "vietnamnet.vn": {
+   "vi": 34
+  },
+  "dantri.com.vn": {
+   "vi": 10
+  },
+  "baocantho.com.vn": {
+   "vi": 40
+  },
+  "www.sggp.org.vn": {
+   "vi": 4
+  },
+  "suckhoecongdongonline.vn": {
+   "vi": 425
+  },
+  "baogialai.com.vn": {
+   "vi": 8
+  },
+  "baochinhphu.vn": {
+   "vi": 7
+  },
+  "phuyen.baodaklak.vn": {
+   "vi": 12
+  },
+  "hanoimoi.vn": {
+   "vi": 2
+  },
+  "nhandan.vn": {
+   "vi": 14
+  },
+  "bachmai.gov.vn": {
+   "vi": 12
+  },
+  "jbk.39.net": {
+   "zh": 44
+  },
+  "baoquangtri.vn": {
+   "vi": 16
+  },
+  "tiemchunglongchau.com.vn": {
+   "vi": 40
+  },
+  "vnexpress.net": {
+   "vi": 7
+  },
+  "baovinhlong.com.vn": {
+   "vi": 13
+  },
+  "baophutho.vn": {
+   "vi": 1
+  },
+  "tienphong.vn": {
+   "vi": 5
+  },
+  "www.wujue.com": {
+   "zh": 121
+  },
+  "giadinhonline.vn": {
+   "vi": 39
+  },
+  "www.vietnamplus.vn": {
+   "vi": 11
+  },
+  "tamanhhospital.vn": {
+   "vi": 10
+  },
+  "nhathuoclongchau.com.vn": {
+   "vi": 247
+  },
+  "health.people.com.cn": {
+   "zh": 5
+  },
+  "www.120ask.com": {
+   "zh": 2436
+  },
+  "baoangiang.com.vn": {
+   "vi": 25
+  },
+  "thaythuocvietnam.vn": {
+   "vi": 3
+  },
+  "zhongyibaodian.net": {
+   "zh": 383
+  },
+  "hellobacsi.com": {
+   "vi": 35
+  },
+  "baoquangninh.vn": {
+   "vi": 4
+  },
+  "www.msdmanuals.cn": {
+   "zh": 14
+  },
+  "www.qdnd.vn": {
+   "vi": 7
+  },
+  "gc.39.net": {
+   "zh": 8
+  },
+  "baotayninh.vn": {
+   "vi": 3
+  },
+  "khoahocphothong.vn": {
+   "vi": 20
+  },
+  "jb39.com": {
+   "zh": 19
+  },
+  "www.baidu.com": {
+   "zh": 12
+  },
+  "www.cnkang.com": {
+   "zh": 2547
+  },
+  "baolangson.vn": {
+   "vi": 3
+  },
+  "test.pmphai.com": {
+   "zh": 44
+  },
+  "www.familydoctor.cn": {
+   "zh": 1
+  },
+  "youmed.vn": {
+   "vi": 23
+  },
+  "ask.39.net": {
+   "zh": 917
+  },
+  "suckhoeviet.org.vn": {
+   "vi": 18
+  },
+  "benhvienvietduc.org": {
+   "vi": 1
+  },
+  "food.39.net": {
+   "zh": 39
+  },
+  "fitness.39.net": {
+   "zh": 35
+  },
+  "wei.39.net": {
+   "zh": 25
+  },
+  "baby.39.net": {
+   "zh": 77
+  },
+  "qihuangzhishu.com": {
+   "zh": 53
+  },
+  "shen.39.net": {
+   "zh": 9
+  },
+  "care.39.net": {
+   "zh": 47
+  },
+  "man.39.net": {
+   "zh": 17
+  },
+  "gan.39.net": {
+   "zh": 12
+  },
+  "woman.39.net": {
+   "zh": 32
+  },
+  "tnb.39.net": {
+   "zh": 15
+  },
+  "nk.39.net": {
+   "zh": 19
+  },
+  "fk.39.net": {
+   "zh": 29
+  },
+  "heart.39.net": {
+   "zh": 9
+  },
+  "ek.39.net": {
+   "zh": 7
+  },
+  "cancer.39.net": {
+   "zh": 15
+  },
+  "pf.39.net": {
+   "zh": 6
+  },
+  "gk.39.net": {
+   "zh": 4
+  },
+  "byby.39.net": {
+   "zh": 1
+  }
+ },
+ "len_chars": {
+  "mean": 1353.1450223191114,
+  "p5": 103.0,
+  "p25": 268.0,
+  "p50": 597.0,
+  "p75": 1430.0,
+  "p95": 5713.399999999994,
+  "p99": 8169.600000000013,
+  "max": 32826
+ },
+ "len_chars_by_lang": {
+  "vi": {
+   "mean": 3824.039145907473,
+   "p5": 880.4000000000002,
+   "p25": 2077.0,
+   "p50": 3430.0,
+   "p75": 5345.5,
+   "p95": 7438.899999999999,
+   "p99": 10051.39999999998,
+   "max": 32124
+  },
+  "zh": {
+   "mean": 719.1444038612053,
+   "p5": 94.0,
+   "p25": 214.0,
+   "p50": 467.0,
+   "p75": 792.0,
+   "p95": 2090.75,
+   "p99": 5688.600000000006,
+   "max": 32826
+  }
+ },
+ "dup_extra_copies": 26,
+ "dup_ratio": 0.002699055330634278,
+ "progress_status": {
+  "ok": 9633,
+  "empty": 213,
+  "http_521": 42,
+  "err_timeout": 42,
+  "gone_redirect": 16,
+  "http_403": 10,
+  "http_404": 2
+ },
+ "n_progress": 9958,
+ "links_total": 4394718,
+ "links_by_host_top10": {
+  "www.cnkang.com": 963438,
+  "www.120ask.com": 918479,
+  "www.familydoctor.com.cn": 447453,
+  "ask.39.net": 337375,
+  "zysjonline.com": 243347,
+  "www.a-hospital.com": 169339,
+  "suckhoecongdongonline.vn": 154503,
+  "zhongyibaodian.net": 146700,
+  "suckhoedoisong.vn": 85823,
+  "nhathuoclongchau.com.vn": 79598
+ },
+ "links_n_hosts": 97
+}

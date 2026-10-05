@@ -1,0 +1,506 @@
+{
+ "config": {
+  "repeat_line_ratio": 0.3,
+  "min_group_docs": 50,
+  "min_docs_for_stats": 2000,
+  "max_stats_docs": 5000,
+  "min_chars": 100,
+  "heading": {
+   "max_len": 20,
+   "min_followed_by_content": 0.6,
+   "max_at_end": 0.3,
+   "max_at_start": 0.5
+  },
+  "groups": [
+   {
+    "suffix": "39.net",
+    "exclude": [
+     "ask.39.net",
+     "jbk.39.net"
+    ],
+    "name": "39.net (kênh tin)"
+   }
+  ],
+  "force_drop": {
+   "nhathuoclongchau.com.vn": [
+    "Xem thêm:"
+   ],
+   "laodong.vn": [
+    "Bình luận:",
+    "Bạn nghĩ gì về nội dung này?",
+    "Bạn cần đăng nhập để gửi bình luận.",
+    "Gửi bình luận"
+   ],
+   "thanhnien.vn": [
+    "tin liên quan"
+   ],
+   "suckhoedoisong.vn": [
+    "Xem thêm video đang được quan tâm:",
+    "Mời quý vị và các bạn đón xem video dưới đây:"
+   ],
+   "suckhoecongdongonline.vn": [
+    "Bài liên quan"
+   ]
+  },
+  "force_keep": {},
+  "lines_file": "clean_lines.json",
+  "out_dir": "corpus_clean",
+  "part_size": 200000
+ },
+ "seed": 42,
+ "input": "E:\\Medical Retrieval\\out",
+ "stats": {
+  "www.cnkang.com": {
+   "docs": 2547,
+   "stats_docs": 2547,
+   "filtered": true
+  },
+  "www.120ask.com": {
+   "docs": 2436,
+   "stats_docs": 2436,
+   "filtered": true
+  },
+  "ask.39.net": {
+   "docs": 917,
+   "stats_docs": 917,
+   "filtered": true
+  },
+  "www.a-hospital.com": {
+   "docs": 448,
+   "stats_docs": 448,
+   "filtered": true
+  },
+  "suckhoecongdongonline.vn": {
+   "docs": 425,
+   "stats_docs": 425,
+   "filtered": true
+  },
+  "39.net (kênh tin)": {
+   "docs": 406,
+   "stats_docs": 406,
+   "filtered": true
+  },
+  "zhongyibaodian.net": {
+   "docs": 383,
+   "stats_docs": 383,
+   "filtered": true
+  },
+  "nhathuoclongchau.com.vn": {
+   "docs": 247,
+   "stats_docs": 247,
+   "filtered": true
+  },
+  "suckhoedoisong.vn": {
+   "docs": 233,
+   "stats_docs": 233,
+   "filtered": true
+  },
+  "thanhnien.vn": {
+   "docs": 191,
+   "stats_docs": 191,
+   "filtered": true
+  },
+  "www.zydcd.com": {
+   "docs": 132,
+   "stats_docs": 132,
+   "filtered": true
+  },
+  "www.wujue.com": {
+   "docs": 121,
+   "stats_docs": 121,
+   "filtered": true
+  },
+  "www.youlai.cn": {
+   "docs": 84,
+   "stats_docs": 84,
+   "filtered": true
+  },
+  "laodong.vn": {
+   "docs": 81,
+   "stats_docs": 81,
+   "filtered": true
+  },
+  "medlatec.vn": {
+   "docs": 72,
+   "stats_docs": 72,
+   "filtered": true
+  },
+  "phunusuckhoe.giadinhonline.vn": {
+   "docs": 71,
+   "stats_docs": 71,
+   "filtered": true
+  },
+  "www.vinmec.com": {
+   "docs": 58,
+   "stats_docs": 58,
+   "filtered": true
+  },
+  "qihuangzhishu.com": {
+   "docs": 53,
+   "stats_docs": 53,
+   "filtered": true
+  },
+  "jbk.39.net": {
+   "docs": 44,
+   "stats_docs": 44,
+   "filtered": false
+  },
+  "test.pmphai.com": {
+   "docs": 44,
+   "stats_docs": 44,
+   "filtered": false
+  },
+  "baocantho.com.vn": {
+   "docs": 40,
+   "stats_docs": 40,
+   "filtered": false
+  },
+  "tiemchunglongchau.com.vn": {
+   "docs": 40,
+   "stats_docs": 40,
+   "filtered": false
+  },
+  "giadinhonline.vn": {
+   "docs": 39,
+   "stats_docs": 39,
+   "filtered": false
+  },
+  "baonghean.vn": {
+   "docs": 38,
+   "stats_docs": 38,
+   "filtered": false
+  },
+  "baodanang.vn": {
+   "docs": 36,
+   "stats_docs": 36,
+   "filtered": false
+  },
+  "hellobacsi.com": {
+   "docs": 35,
+   "stats_docs": 35,
+   "filtered": false
+  },
+  "vietnamnet.vn": {
+   "docs": 34,
+   "stats_docs": 34,
+   "filtered": false
+  },
+  "baohaiphong.vn": {
+   "docs": 33,
+   "stats_docs": 33,
+   "filtered": false
+  },
+  "vov.vn": {
+   "docs": 26,
+   "stats_docs": 26,
+   "filtered": false
+  },
+  "baoangiang.com.vn": {
+   "docs": 25,
+   "stats_docs": 25,
+   "filtered": false
+  },
+  "youmed.vn": {
+   "docs": 23,
+   "stats_docs": 23,
+   "filtered": false
+  },
+  "khoahocphothong.vn": {
+   "docs": 20,
+   "stats_docs": 20,
+   "filtered": false
+  },
+  "jb39.com": {
+   "docs": 19,
+   "stats_docs": 19,
+   "filtered": false
+  },
+  "suckhoeviet.org.vn": {
+   "docs": 18,
+   "stats_docs": 18,
+   "filtered": false
+  },
+  "baoquangtri.vn": {
+   "docs": 16,
+   "stats_docs": 16,
+   "filtered": false
+  },
+  "vov2.vov.vn": {
+   "docs": 14,
+   "stats_docs": 14,
+   "filtered": false
+  },
+  "nhandan.vn": {
+   "docs": 14,
+   "stats_docs": 14,
+   "filtered": false
+  },
+  "www.msdmanuals.cn": {
+   "docs": 14,
+   "stats_docs": 14,
+   "filtered": false
+  },
+  "baovinhlong.com.vn": {
+   "docs": 13,
+   "stats_docs": 13,
+   "filtered": false
+  },
+  "tuoitre.vn": {
+   "docs": 12,
+   "stats_docs": 12,
+   "filtered": false
+  },
+  "phuyen.baodaklak.vn": {
+   "docs": 12,
+   "stats_docs": 12,
+   "filtered": false
+  },
+  "bachmai.gov.vn": {
+   "docs": 12,
+   "stats_docs": 12,
+   "filtered": false
+  },
+  "www.baidu.com": {
+   "docs": 12,
+   "stats_docs": 12,
+   "filtered": false
+  },
+  "www.vietnamplus.vn": {
+   "docs": 11,
+   "stats_docs": 11,
+   "filtered": false
+  },
+  "dantri.com.vn": {
+   "docs": 10,
+   "stats_docs": 10,
+   "filtered": false
+  },
+  "tamanhhospital.vn": {
+   "docs": 10,
+   "stats_docs": 10,
+   "filtered": false
+  },
+  "baogialai.com.vn": {
+   "docs": 8,
+   "stats_docs": 8,
+   "filtered": false
+  },
+  "baochinhphu.vn": {
+   "docs": 7,
+   "stats_docs": 7,
+   "filtered": false
+  },
+  "vnexpress.net": {
+   "docs": 7,
+   "stats_docs": 7,
+   "filtered": false
+  },
+  "www.qdnd.vn": {
+   "docs": 7,
+   "stats_docs": 7,
+   "filtered": false
+  },
+  "tienphong.vn": {
+   "docs": 5,
+   "stats_docs": 5,
+   "filtered": false
+  },
+  "health.people.com.cn": {
+   "docs": 5,
+   "stats_docs": 5,
+   "filtered": false
+  },
+  "www.sggp.org.vn": {
+   "docs": 4,
+   "stats_docs": 4,
+   "filtered": false
+  },
+  "baoquangninh.vn": {
+   "docs": 4,
+   "stats_docs": 4,
+   "filtered": false
+  },
+  "benhviennhitrunguong.gov.vn": {
+   "docs": 3,
+   "stats_docs": 3,
+   "filtered": false
+  },
+  "thaythuocvietnam.vn": {
+   "docs": 3,
+   "stats_docs": 3,
+   "filtered": false
+  },
+  "baotayninh.vn": {
+   "docs": 3,
+   "stats_docs": 3,
+   "filtered": false
+  },
+  "baolangson.vn": {
+   "docs": 3,
+   "stats_docs": 3,
+   "filtered": false
+  },
+  "hanoimoi.vn": {
+   "docs": 2,
+   "stats_docs": 2,
+   "filtered": false
+  },
+  "baophutho.vn": {
+   "docs": 1,
+   "stats_docs": 1,
+   "filtered": false
+  },
+  "www.familydoctor.cn": {
+   "docs": 1,
+   "stats_docs": 1,
+   "filtered": false
+  },
+  "benhvienvietduc.org": {
+   "docs": 1,
+   "stats_docs": 1,
+   "filtered": false
+  }
+ },
+ "lines": {
+  "www.cnkang.com": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "www.120ask.com": {
+   "drop": [],
+   "keep_heading": [
+    {
+     "line": "指导意见：",
+     "df": 776,
+     "ratio": 0.319,
+     "followed_by_content": 0.97,
+     "at_end": 0.24,
+     "at_start": 0.0
+    }
+   ]
+  },
+  "ask.39.net": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "www.a-hospital.com": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "suckhoecongdongonline.vn": {
+   "drop": [
+    {
+     "line": "Bài liên quan",
+     "df": 26,
+     "ratio": 0.061,
+     "forced": true
+    }
+   ],
+   "keep_heading": []
+  },
+  "39.net (kênh tin)": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "zhongyibaodian.net": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "nhathuoclongchau.com.vn": {
+   "drop": [
+    {
+     "line": "Xem thêm:",
+     "df": 73,
+     "ratio": 0.296,
+     "forced": true
+    }
+   ],
+   "keep_heading": []
+  },
+  "suckhoedoisong.vn": {
+   "drop": [
+    {
+     "line": "Xem thêm video đang được quan tâm:",
+     "df": 20,
+     "ratio": 0.086,
+     "forced": true
+    },
+    {
+     "line": "Mời quý vị và các bạn đón xem video dưới đây:",
+     "df": 8,
+     "ratio": 0.034,
+     "forced": true
+    }
+   ],
+   "keep_heading": []
+  },
+  "thanhnien.vn": {
+   "drop": [
+    {
+     "line": "tin liên quan",
+     "df": 31,
+     "ratio": 0.162,
+     "forced": true
+    }
+   ],
+   "keep_heading": []
+  },
+  "www.zydcd.com": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "www.wujue.com": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "www.youlai.cn": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "laodong.vn": {
+   "drop": [
+    {
+     "line": "Bạn nghĩ gì về nội dung này?",
+     "df": 13,
+     "ratio": 0.16,
+     "forced": true
+    },
+    {
+     "line": "Bạn cần đăng nhập để gửi bình luận.",
+     "df": 13,
+     "ratio": 0.16,
+     "forced": true
+    },
+    {
+     "line": "Gửi bình luận",
+     "df": 13,
+     "ratio": 0.16,
+     "forced": true
+    },
+    {
+     "line": "Bình luận:",
+     "df": 13,
+     "ratio": 0.16,
+     "forced": true
+    }
+   ],
+   "keep_heading": []
+  },
+  "medlatec.vn": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "phunusuckhoe.giadinhonline.vn": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "www.vinmec.com": {
+   "drop": [],
+   "keep_heading": []
+  },
+  "qihuangzhishu.com": {
+   "drop": [],
+   "keep_heading": []
+  }
+ }
+}

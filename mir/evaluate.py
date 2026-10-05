@@ -111,24 +111,15 @@ def evaluate(run, qrels, texts, doc_lang, ec, k_doc, k_chunk):
     return summ, per_q
 
 
-def load_context(cfg, run, strategy, unit=None):
-    """Văn bản các đoạn trong top của run (để khớp chunk_text) + ngôn ngữ tài liệu."""
-    ks = cfg["eval"]["ks"]
-    kmax = max(max(ks), cfg["submit"]["k_chunk"])
-    top = run[run["rank"] <= kmax]
-    ids = top["chunk_id"].unique().tolist()
-    chunk_dir = cfg.work_dir / cfg["chunk"]["out_dir"] / strategy
-    is_parent = unit == "parent" or any(c.rsplit("_", 1)[1].startswith("p") for c in ids[:50])   # id đoạn cha: doc_pK
-    if is_parent:
-        t = store.lookup(chunk_dir, "parent_id", ids, ["text"], prefix="parents-")
-    else:
-        t = store.lookup(chunk_dir, "chunk_id", ids, ["text"])
-    texts = {k: v["text"] for k, v in t.items()}
-    return texts
+def load_context(cfg, run, strategy):
+    """Văn bản các đoạn (hoặc đoạn cha) trong top của run, để khớp chunk_text."""
+    kmax = max(max(cfg["eval"]["ks"]), cfg["submit"]["k_chunk"])
+    ids = run[run["rank"] <= kmax]["chunk_id"].unique().tolist()
+    return {k: v["text"] for k, v in store.unit_rows(cfg.path("chunks", strategy), ids).items()}
 
 
 def doc_langs(cfg, doc_ids):
-    m = store.lookup(cfg.work_dir / cfg["clean"]["out_dir"], "doc_id", list(doc_ids), ["lang"])
+    m = store.lookup(cfg.path("clean"), "doc_id", list(doc_ids), ["lang"])
     return {k: v["lang"] for k, v in m.items()}
 
 
@@ -198,17 +189,17 @@ def main():
     ap.add_argument("--runs", default=None)
     ap.add_argument("--tables", action="store_true")
     a = ap.parse_args()
+    if not (a.run or a.tables):
+        ap.error("cần --run <run file> hoặc --tables")
     cfg = config.load(a.config)
     qpath = a.qrels or cfg["eval"]["qrels"]
     if not qpath:
-        raise SystemExit("Chưa có qrels (eval.qrels = null). Cần quyết định cách tạo tập đánh giá trước — xem NOTES.md.")
+        raise SystemExit("Chưa có qrels (eval.qrels = null): xem docs/t7_danh_gia.md.")
     qrels = load_qrels(qpath)
     strategy = a.strategy or cfg["chunk"]["strategy"]
-    res_dir = cfg.work_dir / "results"
-    res_dir.mkdir(parents=True, exist_ok=True)
+    res_dir = cfg.results()
     if a.tables:
-        rdir = Path(a.runs) if a.runs else cfg.work_dir / cfg["retrieve"]["out_dir"]
-        out, res = tables(cfg, rdir, qrels, strategy)
+        out, res = tables(cfg, cfg.path("runs", override=a.runs), qrels, strategy)
         for n, md in out.items():
             (res_dir / f"exp_{n}.md").write_text(md, encoding="utf-8")
             print(md)

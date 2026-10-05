@@ -11,7 +11,7 @@
   python -m mir.chunk --config configs/baseline.yaml [--strategy structure]          # corpus_clean/ → chunks/<strategy>/
   python -m mir.chunk --config configs/baseline.yaml --input sample/corpus_clean --out sample/chunks --strategy all
   python -m mir.chunk --config configs/baseline.yaml --report --input sample/corpus_clean --out sample/chunks
-Chạy lại: bỏ qua file part đã có (dùng --force để làm lại).
+Chạy lại: bỏ qua file part đã có và mới hơn part nguồn trong corpus_clean (dùng --force để làm lại tất cả).
 """
 import argparse
 import bisect
@@ -248,13 +248,19 @@ def run(in_dir, out_root, strategy, cc, force=False, shard="0/1"):
     out.mkdir(parents=True, exist_ok=True)
     si, sn = (int(x) for x in shard.split("/"))
     parts = sorted(Path(in_dir).glob("part-*.parquet"))
+    orphan = sorted(f.name for f in out.glob("part-*.parquet") if f.name not in {p.name for p in parts})
+    if orphan:
+        print(f"[CẢNH BÁO] {out} có {len(orphan)} part không còn trong {in_dir} ({', '.join(orphan[:5])}): "
+              "xoá tay trước khi chạy T3")
     for k, p in enumerate(parts):
         if k % sn != si:
             continue
         dst = out / p.name
         if dst.exists() and not force:
-            print(f"  {dst} đã có → bỏ qua")
-            continue
+            if dst.stat().st_mtime >= p.stat().st_mtime:
+                print(f"  {dst} đã có → bỏ qua")
+                continue
+            print(f"  {dst} cũ hơn {p} (corpus_clean đã làm lại) → chia lại")
         rows, prow = process_table(pq.read_table(p), strategy, cc, tok)
         tmp = dst.with_suffix(".tmp")                       # ghi tạm rồi đổi tên: part dở dang không bị coi là xong
         if prow:
@@ -344,12 +350,11 @@ def main():
     a = ap.parse_args()
     cfg = config.load(a.config)
     cc = cfg["chunk"]
-    in_dir = Path(a.input) if a.input else cfg.work_dir / cfg["clean"]["out_dir"]
-    out_root = Path(a.out) if a.out else cfg.work_dir / cc["out_dir"]
+    in_dir = cfg.path("clean", override=a.input)
+    out_root = cfg.path("chunks", override=a.out)
     if a.report:
         md, summary = report(in_dir, out_root, cc, a.est_docs)
-        res = cfg.work_dir / "results"
-        res.mkdir(parents=True, exist_ok=True)
+        res = cfg.results()
         (res / "t2_report.md").write_text(md, encoding="utf-8")
         (res / "t2_report.json").write_text(json.dumps({"summary": summary, "chunk": cc, "input": str(in_dir)},
                                                        ensure_ascii=False, indent=1), encoding="utf-8")

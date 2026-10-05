@@ -36,11 +36,9 @@ def to_parent(df, chunk_dir):
     return df.reset_index(drop=True)
 
 
-def candidate_texts(ids, chunk_dir, clean_dir, unit):
-    if unit == "parent":
-        rows = store.lookup(chunk_dir, "parent_id", ids, ["doc_id", "text"], prefix="parents-")
-    else:
-        rows = store.lookup(chunk_dir, "chunk_id", ids, ["doc_id", "text"])
+def candidate_texts(ids, chunk_dir, clean_dir):
+    """{id đoạn hoặc đoạn cha: tiêu đề + "\\n" + văn bản} — cùng dạng đầu vào như khi mã hoá ở T3."""
+    rows = store.unit_rows(chunk_dir, ids, ["doc_id", "text"])
     titles = store.lookup(clean_dir, "doc_id", list({r["doc_id"] for r in rows.values()}), ["title"])
     return {k: ((titles.get(r["doc_id"], {}).get("title") or "").strip() + "\n" + r["text"]) for k, r in rows.items()}
 
@@ -80,8 +78,8 @@ def main():
     rc, ec = cfg["rerank"], cfg["encode"]
     strategy = a.strategy or cfg["chunk"]["strategy"]
     unit = a.unit or rc["unit"]
-    chunk_dir = Path(a.chunks) if a.chunks else cfg.work_dir / cfg["chunk"]["out_dir"] / strategy
-    clean_dir = Path(a.clean) if a.clean else cfg.work_dir / cfg["clean"]["out_dir"]
+    chunk_dir = cfg.path("chunks", strategy, a.chunks)
+    clean_dir = cfg.path("clean", override=a.clean)
     run_path = Path(a.run)
     part_dir = run_path.with_name(run_path.stem + "_rr")
     final = run_path.with_name(run_path.stem + "_rr.parquet")
@@ -93,14 +91,17 @@ def main():
     if not part.exists() or a.force:
         from .encode import M3Encoder
         from .retrieve import load_queries
-        qpath = Path(a.queries) if a.queries else cfg.data_dir / cfg["retrieve"]["queries"]
-        qids, qtexts = load_queries(qpath)
+        qids, qtexts = load_queries(cfg.path("queries", override=a.queries))
         df = runs.read(run_path)
+        missing = set(df["qid"]) - set(qids)
+        if missing:
+            raise SystemExit(f"{len(missing)} câu hỏi trong run không có trong file câu hỏi (vd {sorted(missing)[:5]}). "
+                             "Muốn xếp hạng lại một phần câu hỏi: lọc run rồi ghi ra tên khác, vd runs/<run>_eval.parquet.")
         if unit == "parent":
             df = to_parent(df, chunk_dir)
         mine = [q for k, q in enumerate(sorted(df["qid"].unique())) if k % sn == si]
         df = df[df["qid"].isin(mine) & (df["rank"] <= rc["top_n"])]
-        texts = candidate_texts(df["chunk_id"].unique().tolist(), chunk_dir, clean_dir, unit)
+        texts = candidate_texts(df["chunk_id"].unique().tolist(), chunk_dir, clean_dir)
         enc = M3Encoder.load(ec["model"], a.device, ec["fp16"], ec["max_length"], colbert=True)
         res = rerank_run(enc, df, dict(zip(qids, qtexts)), texts, rc)
         runs.write(res, part, {"run": str(run_path), "unit": unit, "top_n": rc["top_n"], "shard": a.shard,

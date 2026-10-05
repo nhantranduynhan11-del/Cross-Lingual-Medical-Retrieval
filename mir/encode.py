@@ -1,6 +1,6 @@
 """T3: mã hoá BGE-M3 — vector dense (CLS, chuẩn hoá L2) + lexical weights (sparse). ColBERT để dành cho T6.
 
-Cài đặt lại đúng BGEM3 của FlagEmbedding (đã đối chiếu trong notebooks/t3_encode_kaggle.ipynb):
+Cài đặt lại đúng BGEM3 của FlagEmbedding (đã đối chiếu ở ô (2) của notebooks/e2e_test_kaggle.ipynb):
   dense  = last_hidden[:, 0] chuẩn hoá L2
   sparse = relu(sparse_linear(last_hidden)), bỏ token đặc biệt (<s> </s> <pad> <unk>), mỗi token id lấy giá trị lớn nhất.
 Đầu vào mỗi đoạn: tiêu đề + "\\n" + đoạn, cắt ở max_length (tính cả <s></s>).
@@ -8,11 +8,14 @@ Cài đặt lại đúng BGEM3 của FlagEmbedding (đã đối chiếu trong no
 Chia việc: toàn bộ đoạn (đọc các chunks/<strategy>/part-*.parquet theo thứ tự) được cắt thành khối shard_size đoạn;
 khối k → emb/<strategy>/shard-{k:04d}/ gồm dense.npy (float16 [n,1024]), sparse.npz (CSR float16, đọc bằng
 load_sparse()), chunk_ids.parquet, _DONE.json. --shard i/N làm các khối k % N == i; khối đã có _DONE.json bị bỏ qua.
+Khối k chỉ có nghĩa khi mọi người mã hoá cùng một bản chunks: _DONE.json ghi dấu vân tay chunks_fp, và lệnh này cũng
+như mir.index từ chối trộn các khối có dấu vân tay khác nhau.
 
   python -m mir.encode --config configs/baseline.yaml --shard 0/6 --device cuda:0
   python -m mir.encode --config configs/baseline.yaml --bench 2000 --device cuda:0      # đo tốc độ, ước lượng toàn kho
 """
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -65,7 +68,10 @@ class M3Encoder:
         import torch
         from transformers import AutoModel, AutoTokenizer
         tok = AutoTokenizer.from_pretrained(name)
-        model = AutoModel.from_pretrained(name)
+        try:                                                  # attention SDPA của PyTorch (nhanh hơn trên GPU)
+            model = AutoModel.from_pretrained(name, attn_implementation="sdpa")
+        except Exception:
+            model = AutoModel.from_pretrained(name)
         H = model.config.hidden_size
 
         def head(fname, out_dim):
@@ -155,6 +161,17 @@ def chunk_parts(chunk_dir):
     return [(p, pq.ParquetFile(p).metadata.num_rows) for p in parts]
 
 
+def fingerprint(parts):
+    """Dấu vân tay của một bản chunks: tên file part và số đoạn mỗi file."""
+    return hashlib.sha1(";".join(f"{p.name}:{n}" for p, n in parts).encode()).hexdigest()[:12]
+
+
+def done_meta(shard_dir):
+    """Nội dung _DONE.json của một khối, hoặc None nếu khối chưa xong."""
+    f = Path(shard_dir) / "_DONE.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
+
 def block_rows(parts, k, size):
     """Khối k = các đoạn [k*size, (k+1)*size) của chuỗi nối mọi part → [(part, đầu, cuối)]."""
     lo, hi, pos, out = k * size, (k + 1) * size, 0, []
@@ -209,6 +226,11 @@ def write_shard(out, ids, dense, sparse, vocab, meta):
 def run(enc, chunk_dir, clean_dir, out_root, ec, shard="0/1", force=False, log=print):
     parts = chunk_parts(chunk_dir)
     total = sum(n for _, n in parts)
+    fp = fingerprint(parts)
+    other = {m.get("chunks_fp") for d in Path(out_root).glob("shard-*") if (m := done_meta(d))} - {None, fp}
+    if other:
+        raise SystemExit(f"{out_root} đã có khối mã hoá từ bản chunks khác (dấu vân tay {sorted(other)}, bản đang dùng "
+                         f"{fp}). Dùng đúng bản mir-data của các khối đó, hoặc ghi ra thư mục --out khác.")
     n_blocks = (total + ec["shard_size"] - 1) // ec["shard_size"]
     si, sn = (int(x) for x in shard.split("/"))
     mine = [k for k in range(n_blocks) if k % sn == si]
@@ -223,7 +245,8 @@ def run(enc, chunk_dir, clean_dir, out_root, ec, shard="0/1", force=False, log=p
         sec = time.time() - t0
         meta = {"block": k, "n": len(b["chunk_id"]), "seconds": round(sec, 1), "truncated": trunc,
                 "nnz": int(sum(len(t) for t, _ in sparse)), "model": ec["model"], "max_length": ec["max_length"],
-                "fp16": enc.half, "chunk_dir": str(chunk_dir)}
+                "fp16": enc.half, "chunk_dir": str(chunk_dir), "chunks_total": total, "chunks_fp": fp,
+                "shard_size": ec["shard_size"]}
         write_shard(Path(out_root) / f"shard-{k:04d}", b["chunk_id"], dense, sparse, enc.vocab, meta)
         log(f"  khối {k}: {meta['n']:,} đoạn, {sec:.0f}s ({meta['n'] / max(sec, 1e-9):.0f} đoạn/s), "
             f"bị cắt {trunc}, nnz/đoạn {meta['nnz'] / max(1, meta['n']):.0f}")
@@ -237,19 +260,19 @@ def bench(enc, chunk_dir, clean_dir, ec, n, est_chunks=None, log=print):
     enc.encode(texts[:64], ec["batch_tokens"], ec["max_batch"])          # khởi động (cuDNN, cấp phát bộ nhớ)
     torch = enc.torch
     if enc.device.type == "cuda":
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize(enc.device)
+        torch.cuda.reset_peak_memory_stats(enc.device)
     t0 = time.time()
     dense, sparse, trunc = enc.encode(texts, ec["batch_tokens"], ec["max_batch"], ec["sparse_min_weight"])
     if enc.device.type == "cuda":
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(enc.device)
     sec = time.time() - t0
     nnz = sum(len(t) for t, _ in sparse) / len(texts)
     rate = len(texts) / sec
     res = {"device": str(enc.device), "fp16": enc.half, "n": len(texts), "seconds": round(sec, 1),
            "chunks_per_s": round(rate, 1), "truncated": trunc, "nnz_per_chunk": round(nnz, 1),
            "dense_bytes_per_chunk": dense.shape[1] * 2, "sparse_bytes_per_chunk": round(nnz * 6, 1),
-           "peak_gpu_mem_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2) if enc.device.type == "cuda" else None}
+           "peak_gpu_mem_gb": round(torch.cuda.max_memory_allocated(enc.device) / 1e9, 2) if enc.device.type == "cuda" else None}
     if est_chunks:
         res["est_chunks"] = est_chunks
         res["est_gpu_hours_1gpu"] = round(est_chunks / rate / 3600, 1)
@@ -275,15 +298,14 @@ def main():
     cfg = config.load(a.config)
     ec = cfg["encode"]
     strategy = a.strategy or cfg["chunk"]["strategy"]
-    chunk_dir = Path(a.input) if a.input else cfg.work_dir / cfg["chunk"]["out_dir"] / strategy
-    clean_dir = Path(a.clean) if a.clean else cfg.work_dir / cfg["clean"]["out_dir"]
-    out_root = Path(a.out) if a.out else cfg.work_dir / ec["out_dir"] / strategy
+    chunk_dir = cfg.path("chunks", strategy, a.input)
+    clean_dir = cfg.path("clean", override=a.clean)
+    out_root = cfg.path("emb", strategy, a.out)
     enc = M3Encoder.load(ec["model"], a.device, ec["fp16"], ec["max_length"])
     if a.bench:
         res = bench(enc, chunk_dir, clean_dir, ec, a.bench, a.est_chunks)
-        d = cfg.work_dir / "results"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"t3_bench_{a.device.replace(':', '')}.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
+        (cfg.results() / f"t3_bench_{a.device.replace(':', '')}.json").write_text(json.dumps(res, indent=1),
+                                                                                 encoding="utf-8")
         return
     out_root.mkdir(parents=True, exist_ok=True)
     run(enc, chunk_dir, clean_dir, out_root, ec, a.shard, a.force)

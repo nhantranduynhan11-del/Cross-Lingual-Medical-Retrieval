@@ -1,7 +1,7 @@
-# Đường dẫn: ưu tiên biến môi trường MIR_DATA_DIR, MIR_WORK_DIR; nếu không có thì dùng giá trị dưới đây.
+# Đường dẫn tương đối tính từ thư mục gốc repo. Biến môi trường MIR_DATA_DIR, MIR_WORK_DIR (nếu có) ghi đè data_dir, work_dir.
 paths:
-  data_dir: "E:/Medical Retrieval"      # chứa Data/ và out/
-  work_dir: "E:/Medical Retrieval"      # nơi ghi sample/, corpus_clean/, chunks/, emb/, runs/, results/
+  data_dir: "."                          # chứa Data/ và out/
+  work_dir: "."                          # nơi ghi sample/, corpus_clean/, chunks/, emb/, index/, runs/, results/
   queries: "Data/query.parquet"
   links: "Data/links_corpus.parquet"
   crawl_dir: "out"                       # có thể chứa part-*.jsonl.gz trực tiếp hoặc trong thư mục con theo shard
@@ -34,7 +34,7 @@ clean:                                   # T1
     suckhoedoisong.vn: ["Xem thêm video đang được quan tâm:", "Mời quý vị và các bạn đón xem video dưới đây:"]
     suckhoecongdongonline.vn: ["Bài liên quan"]
   force_keep: {}                         # {nhóm: [dòng, ...]} — luôn giữ (sau khi duyệt)
-  lines_file: "clean_lines.json"         # danh sách dòng bị loại (kết quả --stats, đầu vào --apply)
+  lines_file: "results/clean_lines.json" # danh sách dòng bị loại (kết quả --stats, đầu vào --apply)
   out_dir: "corpus_clean"
   part_size: 200000                      # số bài mỗi file corpus_clean/part-*.parquet
 
@@ -53,7 +53,7 @@ encode:                                  # T3 — BGE-M3: dense (CLS, chuẩn ho
   model: "BAAI/bge-m3"                   # id Hugging Face hoặc thư mục chứa model + sparse_linear.pt
   max_length: 512                        # tính cả <s></s>; đầu vào = tiêu đề + "\n" + đoạn
   fp16: true                             # chỉ áp dụng trên GPU
-  batch_tokens: 16384                    # tổng số token (sau đệm) mỗi batch; giảm nếu hết bộ nhớ GPU
+  batch_tokens: 16384                    # tổng số token (sau đệm) mỗi batch. T4: 16384 → 185 đoạn/s (2 GPU), 1,55 GB; 65536 → 161 đoạn/s, 2,78 GB
   max_batch: 128
   shard_size: 100000                     # số đoạn mỗi emb/<strategy>/shard-XXXX (đơn vị chia việc và chạy lại)
   sparse_min_weight: 0.0                 # bỏ trọng số <= ngưỡng này (0 = giữ mọi trọng số > 0)

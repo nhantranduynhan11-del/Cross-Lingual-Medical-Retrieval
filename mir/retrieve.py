@@ -6,7 +6,6 @@
 Gộp nhánh (RRF, có trọng số): mir.fuse.
 """
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -64,7 +63,6 @@ def run_branch(branch, index_dir, qemb_path, qids, qtexts, depth, batch=64, npro
     return runs.from_topk(qids, [r[0] for r in res], [r[1] for r in res])
 
 
-
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -83,8 +81,8 @@ def main():
     cfg = config.load(a.config)
     rc = cfg["retrieve"]
     strategy = a.strategy or cfg["chunk"]["strategy"]
-    qpath = Path(a.queries) if a.queries else cfg.data_dir / rc["queries"]
-    qemb = Path(a.qemb) if a.qemb else cfg.work_dir / "qemb" / (qpath.stem + ".npz")
+    qpath = cfg.path("queries", override=a.queries)
+    qemb = Path(a.qemb) if a.qemb else cfg.path("qemb") / (qpath.stem + ".npz")
     qids, qtexts = load_queries(qpath)
     if a.cmd == "qencode":
         from .encode import M3Encoder
@@ -92,13 +90,13 @@ def main():
         enc = M3Encoder.load(ec["model"], a.device, ec["fp16"], ec["max_length"])
         print("→", encode_queries(enc, qids, qtexts, qemb, ec["batch_tokens"], a.force))
         return
-    index_dir = Path(a.index) if a.index else cfg.work_dir / cfg["index"]["out_dir"] / strategy
-    out = Path(a.out) if a.out else cfg.work_dir / rc["out_dir"]
+    index_dir = cfg.path("index", strategy, a.index)
+    out = cfg.path("runs", override=a.out)
     nprobe = cfg["index"]["dense"]["nprobe"]
     lsr_src = None
     if not sparse_index.shards(index_dir / "lsr"):
         from .index import emb_dirs
-        lsr_src = emb_dirs(a.emb) if a.emb else [cfg.work_dir / cfg["encode"]["out_dir"] / strategy]
+        lsr_src = emb_dirs(a.emb) if a.emb else [cfg.path("emb", strategy)]
     for br in (["dense", "lsr", "bm25"] if a.branch == "all" else a.branch.split(",")):
         dst = out / f"{strategy}_{br}.parquet"
         if dst.exists() and not a.force:

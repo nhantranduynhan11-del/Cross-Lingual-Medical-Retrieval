@@ -1,8 +1,12 @@
-"""T0: tạo tập mẫu cố định sample/ (phân tầng theo tên miền). Không ghi đè nếu đã có, trừ khi --force."""
+"""T0: tạo tập mẫu cố định sample/ (phân tầng theo tên miền). Không ghi đè nếu đã có, trừ khi --force.
+
+Tập mẫu hiện có được tạo ngày 4/10/2026 từ 10k URL shard 0 và dùng cho mọi kiểm thử: KHÔNG tạo lại trên kho đầy đủ
+(lệnh này nạp toàn bộ kho crawl vào RAM).
+"""
 import argparse
-import sys
 import json
 import random
+import sys
 from collections import defaultdict
 
 import pyarrow as pa
@@ -41,13 +45,11 @@ def build(cfg, force=False):
         return
     out.mkdir(parents=True, exist_ok=True)
     rng = random.Random(cfg["seed"])
-    by_host, seen = defaultdict(list), set()
-    for d in iter_docs(cfg.crawl_path):
-        if d["id"] in seen:
-            continue
-        seen.add(d["id"])
+    by_host = defaultdict(list)
+    for d in iter_docs(cfg.crawl_path):                   # mỗi id đúng một lần (bản trích mới nhất)
         by_host[d["host"]].append(d)
     sizes = {h: len(v) for h, v in by_host.items()}
+    n_avail = sum(sizes.values())
     alloc = allocate(sizes, sc["n_docs"], sc["min_per_host"])
     chosen = []
     for h in sorted(by_host):
@@ -63,11 +65,11 @@ def build(cfg, force=False):
 
     (out / "sample_meta.json").write_text(json.dumps({
         "seed": cfg["seed"], "n_docs": len(chosen), "n_queries": len(idx),
-        "docs_available_at_sampling": len(seen), "per_host": {h: alloc[h] for h in sorted(alloc)},
+        "docs_available_at_sampling": n_avail, "per_host": {h: alloc[h] for h in sorted(alloc)},
         "config": dict(sc)}, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"Mẫu: {len(chosen)} bài ({len(alloc)} tên miền) từ {len(seen)} bài có sẵn, {len(idx)} câu hỏi → {out}")
-    if len(seen) < sc["n_docs"]:
-        print(f"[LƯU Ý] kho crawl mới có {len(seen)} bài < {sc['n_docs']}: mẫu lấy toàn bộ; nên tạo lại khi crawl nhiều hơn.")
+    print(f"Mẫu: {len(chosen)} bài ({len(alloc)} tên miền) từ {n_avail} bài có sẵn, {len(idx)} câu hỏi → {out}")
+    if n_avail < sc["n_docs"]:
+        print(f"[LƯU Ý] kho crawl mới có {n_avail} bài < {sc['n_docs']}: mẫu lấy toàn bộ.")
 
 
 def main():

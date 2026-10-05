@@ -20,7 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from . import bm25, config, sparse_index
-from .encode import load_sparse
+from .encode import done_meta, load_sparse
 
 
 def emb_dirs(emb):
@@ -31,7 +31,8 @@ def emb_dirs(emb):
 
 
 def emb_shards(emb):
-    """Mọi shard đã xong (_DONE.json) trong các thư mục emb, sắp theo số khối; báo lỗi nếu trùng hoặc thiếu khối."""
+    """Mọi khối đã xong (_DONE.json) trong các thư mục emb, sắp theo số khối. Dừng nếu trùng khối hoặc nếu các khối
+    được mã hoá từ các bản chunks khác nhau; cảnh báo nếu thiếu khối."""
     out = sorted((d for e in emb_dirs(emb) for d in e.glob("shard-*") if (d / "_DONE.json").exists()),
                  key=lambda d: int(d.name.split("-")[1]))
     if not out:
@@ -39,15 +40,23 @@ def emb_shards(emb):
     nums = [int(d.name.split("-")[1]) for d in out]
     if len(set(nums)) != len(nums):
         raise SystemExit("Trùng khối giữa các thư mục emb: " + str(sorted({n for n in nums if nums.count(n) > 1})))
-    missing = sorted(set(range(max(nums) + 1)) - set(nums))
+    metas = [done_meta(d) for d in out]
+    fps = {m.get("chunks_fp") for m in metas} - {None}
+    if len(fps) > 1:
+        raise SystemExit(f"Các khối emb được mã hoá từ các bản chunks khác nhau (dấu vân tay {sorted(fps)}): "
+                         "mọi người phải dùng cùng một phiên bản dataset mir-data.")
+    expected = max(nums) + 1
+    if "chunks_total" in metas[0] and "shard_size" in metas[0]:     # biết tổng số khối → phát hiện cả khối thiếu ở cuối
+        expected = max(expected, -(-metas[0]["chunks_total"] // metas[0]["shard_size"]))
+    missing = sorted(set(range(expected)) - set(nums))
     if missing:
-        print(f"[CẢNH BÁO] thiếu {len(missing)} khối emb: {missing[:20]}{'…' if len(missing) > 20 else ''}")
+        print(f"[CẢNH BÁO] thiếu {len(missing)}/{expected} khối emb: {missing[:20]}{'…' if len(missing) > 20 else ''}")
     return out
 
 
 def _sample_rows(shards, n, seed):
     """Lấy ngẫu nhiên n vector (đều trên toàn bộ) → (ma trận float32, chunk_ids)."""
-    sizes = [json.loads((d / "_DONE.json").read_text(encoding="utf-8"))["n"] for d in shards]
+    sizes = [done_meta(d)["n"] for d in shards]
     total = sum(sizes)
     rng = np.random.default_rng(seed)
     pick = np.sort(rng.choice(total, size=min(n, total), replace=False))
@@ -71,7 +80,7 @@ def build_dense(emb_dir, out_dir, dc, seed=42, force=False, log=print):
         return
     out.mkdir(parents=True, exist_ok=True)
     shards = emb_shards(emb_dir)
-    total = sum(json.loads((d / "_DONE.json").read_text(encoding="utf-8"))["n"] for d in shards)
+    total = sum(done_meta(d)["n"] for d in shards)
     dim = np.load(shards[0] / "dense.npy", mmap_mode="r").shape[1]
     if total < dc["flat_below"]:
         index, kind = faiss.IndexFlatIP(dim), "flat"
@@ -148,9 +157,10 @@ def tune_dense(emb_dir, tc, qvecs=None, seed=42, log=print):
 
 
 def build_lsr(emb_dir, out_dir, force=False, log=print):
-    """Tuỳ chọn: lưu bản CSC của lexical weights. T5 cũng đọc thẳng được từ emb (retrieve --lsr-from-emb)."""
+    """Tuỳ chọn: lưu bản CSC của lexical weights. Nếu không dựng, T5 đọc thẳng từ emb
+    (mir.retrieve run: mặc định <work>/emb/<strategy>, hoặc --emb a,b,c)."""
     out = Path(out_dir) / "lsr"
-    for k, d in enumerate(emb_shards(emb_dir)):
+    for d in emb_shards(emb_dir):
         n = int(d.name.split("-")[1])
         if (out / f"shard-{n:04d}.npz").exists() and not force:
             continue
@@ -175,16 +185,15 @@ def main():
     a = ap.parse_args()
     cfg = config.load(a.config)
     strategy = a.strategy or cfg["chunk"]["strategy"]
-    emb = a.emb if a.emb else cfg.work_dir / cfg["encode"]["out_dir"] / strategy
-    chunks = Path(a.chunks) if a.chunks else cfg.work_dir / cfg["chunk"]["out_dir"] / strategy
-    out = Path(a.out) if a.out else cfg.work_dir / cfg["index"]["out_dir"] / strategy
+    emb = a.emb or cfg.path("emb", strategy)
+    chunks = cfg.path("chunks", strategy, a.chunks)
+    out = cfg.path("index", strategy, a.out)
     if a.cmd == "dense":
         build_dense(emb, out, cfg["index"]["dense"], cfg["seed"], a.force)
     elif a.cmd == "dense-tune":
         qv = np.load(a.qemb)["dense"] if a.qemb else None
         rows, md = tune_dense(emb, cfg["index"]["tune"], qv, cfg["seed"])
-        res = cfg.work_dir / "results"
-        res.mkdir(parents=True, exist_ok=True)
+        res = cfg.results()
         (res / "t4_dense_tune.md").write_text(md, encoding="utf-8")
         (res / "t4_dense_tune.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
         print(md)

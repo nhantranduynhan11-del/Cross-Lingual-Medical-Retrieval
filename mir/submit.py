@@ -90,17 +90,13 @@ def main():
     sc = cfg["submit"]
     k_doc, k_chunk = a.k_doc or sc["k_doc"], a.k_chunk or sc["k_chunk"]
     strategy = a.strategy or cfg["chunk"]["strategy"]
-    chunk_dir = Path(a.chunks) if a.chunks else cfg.work_dir / cfg["chunk"]["out_dir"] / strategy
-    clean_dir = Path(a.clean) if a.clean else cfg.work_dir / cfg["clean"]["out_dir"]
-    qpath = Path(a.queries) if a.queries else cfg.data_dir / cfg["retrieve"]["queries"]
+    chunk_dir = cfg.path("chunks", strategy, a.chunks)
+    clean_dir = cfg.path("clean", override=a.clean)
+    qpath = cfg.path("queries", override=a.queries)
     qids = [int(x) for x in pq.read_table(qpath, columns=["id"]).column("id").to_pylist()]
     run = runs.read(a.run)
-    top = run[run["rank"] <= max(k_chunk, k_doc) * 3]
-    ids = top["chunk_id"].unique().tolist()
-    if any(c.rsplit("_", 1)[1].startswith("p") for c in ids[:50]):
-        texts = store.lookup(chunk_dir, "parent_id", ids, ["text"], prefix="parents-")
-    else:
-        texts = store.lookup(chunk_dir, "chunk_id", ids, ["text"])
+    ids = run[run["rank"] <= max(k_chunk, k_doc) * 3]["chunk_id"].unique().tolist()
+    texts = store.unit_rows(chunk_dir, ids)
     sub = build(run, qids, k_doc, k_chunk, {k: v["text"] for k, v in texts.items()})
     link_ids = set(pq.read_table(cfg.links_path, columns=["id"]).column("id").to_pylist())
     used = {c["doc_id"] for s in sub for c in s["relevant_chunks"]}
@@ -110,12 +106,13 @@ def main():
         print(f"LỖI ({len(errs)}), KHÔNG ghi bài nộp:\n  " + "\n  ".join(errs[:30]))
         raise SystemExit(1)
     name = a.name or Path(a.run).stem
+    out_dir = cfg.path("submissions")
     try:
-        js, zp = write(sub, cfg.work_dir / sc["out_dir"], name, a.force)
+        js, zp = write(sub, out_dir, name, a.force)
     except FileExistsError as e:
         raise SystemExit(f"Không ghi đè: {e}")
     n_empty = sum(1 for s in sub if not s["relevant_docs"])
-    (cfg.work_dir / sc["out_dir"] / f"{name}_meta.json").write_text(json.dumps(
+    (out_dir / f"{name}_meta.json").write_text(json.dumps(
         {"run": a.run, "k_doc": k_doc, "k_chunk": k_chunk, "queries": len(qids), "empty": n_empty}, indent=1),
         encoding="utf-8")
     print(f"Hợp lệ: {len(sub)} câu hỏi ({n_empty} không có kết quả) → {zp}")

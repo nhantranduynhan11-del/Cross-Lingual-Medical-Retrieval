@@ -2,7 +2,7 @@
 
 Hai bước, có điểm duyệt ở giữa:
   python -m mir.clean --config configs/baseline.yaml --stats
-      → <work>/clean_lines.json (dòng bị loại theo nhóm) + results/t1_review.md (để duyệt)
+      → results/clean_lines.json (clean.lines_file: dòng bị loại theo nhóm) + results/t1_review.md (để duyệt)
   python -m mir.clean --config configs/baseline.yaml --apply
       → <work>/corpus_clean/part-*.parquet: doc_id, host, lang, title, text (dùng ĐÚNG clean_lines.json đã duyệt)
 
@@ -188,22 +188,21 @@ def main():
     g.add_argument("--stats", action="store_true", help="bước 1: tính dòng lặp, viết danh sách để duyệt")
     g.add_argument("--apply", action="store_true", help="bước 2: làm sạch theo danh sách đã duyệt")
     ap.add_argument("--input", default=None, help="file parquet thay cho out/ (vd sample/corpus_raw.parquet)")
-    ap.add_argument("--lines", default=None, help="file danh sách dòng (mặc định <work>/clean_lines.json)")
+    ap.add_argument("--lines", default=None, help="file danh sách dòng (mặc định clean.lines_file)")
     ap.add_argument("--out", default=None, help="thư mục corpus_clean (mặc định <work>/corpus_clean)")
     ap.add_argument("--force", action="store_true", help="cho phép ghi đè kết quả đã có")
     a = ap.parse_args()
     cfg = config.load(a.config)
     cc = cfg["clean"]
-    work = cfg.work_dir
-    lines_path = Path(a.lines) if a.lines else work / cc["lines_file"]
-    res_dir = work / "results"
-    res_dir.mkdir(parents=True, exist_ok=True)
+    lines_path = Path(a.lines) if a.lines else cfg.work_dir / cc["lines_file"]
+    res_dir = cfg.results()
 
     if a.stats:
         if lines_path.exists() and not a.force:
             print(f"{lines_path} đã có (có thể đã được duyệt) → không ghi đè; dùng --force để tính lại.")
             return
         lines, stats = compute_lines(read_input(cfg, a.input), cc, cfg["seed"])
+        lines_path.parent.mkdir(parents=True, exist_ok=True)
         lines_path.write_text(json.dumps({"config": cc, "seed": cfg["seed"], "input": a.input or str(cfg.crawl_path),
                                           "stats": stats, "lines": lines}, ensure_ascii=False, indent=1),
                               encoding="utf-8")
@@ -213,7 +212,7 @@ def main():
         print(f"→ {lines_path}\n→ {res_dir / 't1_review.md'}")
         return
 
-    out_dir = Path(a.out) if a.out else work / cc["out_dir"]
+    out_dir = cfg.path("clean", override=a.out)
     if out_dir.exists() and any(out_dir.glob("part-*.parquet")) and not a.force:
         print(f"{out_dir} đã có kết quả → không ghi đè; dùng --force để làm lại.")
         return

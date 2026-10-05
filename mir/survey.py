@@ -1,8 +1,8 @@
 """T0: khảo sát dữ liệu crawl. python -m mir.survey --config configs/baseline.yaml"""
 import argparse
-import sys
 import hashlib
 import json
+import sys
 from collections import Counter, defaultdict
 from urllib.parse import urlparse
 
@@ -20,11 +20,7 @@ def survey(crawl_path, links_path):
     lens = []
     lens_by_lang = defaultdict(list)
     hashes = Counter()
-    seen_ids = set()
-    for d in iter_docs(crawl_path):
-        if d["id"] in seen_ids:
-            continue
-        seen_ids.add(d["id"])
+    for d in iter_docs(crawl_path):                       # mỗi id đúng một lần (bản trích mới nhất)
         n += 1
         t = d.get("text", "")
         hosts[d["host"]] += 1
@@ -89,8 +85,7 @@ def main():
     a = ap.parse_args()
     cfg = config.load(a.config)
     s = survey(cfg.crawl_path, cfg.links_path)
-    out = cfg.work_dir / "results"
-    out.mkdir(parents=True, exist_ok=True)
+    out = cfg.results()
     (out / "t0_survey.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
     md = to_markdown(s)
     (out / "t0_survey.md").write_text(md, encoding="utf-8")
