@@ -1,0 +1,6 @@
+# mircrawl — crawl kho tài liệu ViBioMIR (Kaggle CPU hoặc máy cá nhân, Python >= 3.10)
+curl_cffi>=0.7
+trafilatura>=1.12
+lxml>=5.0
+pyarrow>=14
+pandas>=2.0
