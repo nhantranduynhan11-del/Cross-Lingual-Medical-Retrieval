@@ -1,1 +1,0 @@
-# Cross-Lingual-Medical-Retrieval
