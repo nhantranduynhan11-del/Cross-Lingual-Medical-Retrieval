@@ -1,0 +1,19 @@
+# mirret — chia đoạn, chỉ mục, truy hồi, rerank, đánh giá (Python >= 3.10). Kaggle đã có sẵn phần lớn; notebook tự cài
+# pyvi, jieba, faiss-cpu (và bitsandbytes, accelerate cho k2).
+numpy>=1.24
+pandas>=2.0
+pyarrow>=14
+scipy>=1.10
+pyyaml>=6.0
+tokenizers>=0.15
+huggingface_hub>=0.20
+transformers>=4.51          # Qwen3 cần bản đủ mới
+torch>=2.1
+faiss-cpu>=1.7.4
+pyvi>=0.1.1                 # tách từ tiếng Việt cho BM25
+jieba>=0.42                 # tách từ tiếng Trung cho BM25
+# chỉ khi dịch câu hỏi trên GPU (k2):
+# bitsandbytes>=0.43
+# accelerate>=0.30
+# chỉ để kiểm chứng điểm BM25 (tuỳ chọn):
+# bm25s
