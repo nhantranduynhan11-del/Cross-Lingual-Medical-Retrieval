@@ -24,7 +24,11 @@ import glob, os, shutil, sys, zipfile
 KAGGLE = os.environ.get('KAGGLE_ROOT', '/kaggle')            # chạy thử ngoài Kaggle: đặt biến môi trường KAGGLE_ROOT
 CODE = f'{{KAGGLE}}/working/code'
 shutil.rmtree(CODE, ignore_errors=True)
-hits = sorted(glob.glob(f'{{KAGGLE}}/input/**/mirret/__init__.py', recursive=True), key=len)
+def _ver(h):                                                  # output notebook cũ (vd mir2-chunks/code) cũng có mirret/
+    v = os.path.join(os.path.dirname(os.path.dirname(h)), 'VERSION.txt')
+    return open(v, encoding='utf-8').read().strip() if os.path.exists(v) else ''
+hits = sorted(glob.glob(f'{{KAGGLE}}/input/**/mirret/__init__.py', recursive=True),
+              key=lambda h: (_ver(h), -len(h)), reverse=True)   # bản mã mới nhất theo VERSION.txt (ngày giờ)
 if hits:
     shutil.copytree(os.path.dirname(os.path.dirname(hits[0])), CODE)
 else:
