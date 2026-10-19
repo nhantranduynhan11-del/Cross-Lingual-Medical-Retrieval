@@ -241,7 +241,10 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                "('chunks', 'qtrans')"),
     code('''
 # (2) Xếp hạng lại trên 2 GPU (chia theo câu hỏi), ghi vào /kaggle/working/runs
-RUNS_IN = locate('runs') / 'runs'
+hits = locate_all(f'runs/{RUN}.parquet') or locate_all('runs/vi_dense.parquet')   # bỏ qua runs/ của output k5 cũ
+assert hits, (f'Không thấy runs/{RUN}.parquet hay 9 nhánh (runs/vi_dense.parquet…) trong /kaggle/input: '
+              'Add Input mir2-runs (output k4)')
+RUNS_IN = hits[0] / 'runs'
 OUT = f'{K.work}/runs'
 os.makedirs(OUT, exist_ok=True)
 if QIDS and not os.path.exists(QIDS) and not QIDS.replace(',', '').isdigit():
@@ -256,6 +259,7 @@ if not os.path.exists(f'{RUNS_IN}/{RUN}.parquet'):        # vd mir2-runs cũ ch�
             shutil.copy(f, OUT)
     K.set({'retrieve.out_dir': OUT})
     sh(f'python -m mirret.fuse --config {K.cfg} --only {RUN}', 'fuse')
+    assert os.path.exists(f'{OUT}/{RUN}.parquet'), f'fuse không tạo được {RUN} (thiếu nhánh, xem dòng "thiếu run" ở trên)'
     RUNS_IN = OUT
 print('run đầu vào:', f'{RUNS_IN}/{RUN}.parquet')
 for m in METHODS:

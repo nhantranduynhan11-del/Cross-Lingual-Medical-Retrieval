@@ -59,6 +59,8 @@ def main():
         miss = [r for r, _ in items if r not in have]
         if miss:
             print(f"  {name}: thiếu run {miss} → bỏ qua")
+            if a.only or a.runs:                              # gộp theo yêu cầu cụ thể mà thiếu run → báo lỗi
+                raise SystemExit(f"thiếu run {miss} trong {rdir}")
             continue
         df = rrf([have[r] for r, _ in items], fc["rrf_k"], fc["depth"], [w for _, w in items])
         runs.write(df, rdir / f"{name}.parquet", {"fusion": "rrf", "k": fc["rrf_k"], "runs": [r for r, _ in items],
