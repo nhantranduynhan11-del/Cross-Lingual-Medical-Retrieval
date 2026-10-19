@@ -1,0 +1,175 @@
+# Bảng thuật ngữ y khoa tiếng Việt (thông tục) → en / zh, dùng làm GỢI Ý trong prompt dịch "t2" (mirret/translate.py).
+# Chỉ những thuật ngữ nào khớp với câu hỏi mới được đưa vào prompt (tối đa translate.glossary_max mục, ưu tiên cụm dài).
+# Lập từ các lỗi thật của Qwen2.5-14B / Qwen3-8B (prompt t1) trên 1.200 câu (16/10/2026) + từ thông tục, biệt dược hay gặp.
+# Cột: alias (ngăn bằng " | "; tiền tố "=" = khớp phân biệt hoa thường) <TAB> en <TAB> zh <TAB> ghi chú cho model (tuỳ chọn)
+# Chỉ thêm mục CHẮC CHẮN đúng; mục mơ hồ ghi rõ điều kiện trong ghi chú.
+amidan | a-mi-đan | amiđan | a mi đan	tonsils (palatine tonsils)	扁桃体
+viêm amidan | viêm a-mi-đan	tonsillitis	扁桃体炎
+=VA | viêm va | =V.A	adenoids (VA); viêm VA = adenoiditis	腺样体；腺样体炎	VA là vòm họng (adenoid), KHÁC amidan
+basedow | bệnh basedow	Graves' disease (Basedow's disease)	格雷夫斯病（甲亢）
+hiếm muộn | vô sinh hiếm muộn	infertility	不孕不育	"hiếm muộn" = khó có con, KHÔNG phải "hiếm gặp"
+viêm màng bồ đào	uveitis	葡萄膜炎
+thai lưu | thai chết lưu | lưu thai	missed abortion (fetal demise)	稽留流产（胎停育）
+xương mác	fibula	腓骨
+xương chày	tibia	胫骨
+xương đòn	clavicle	锁骨
+hồi hộp	palpitations	心悸（心慌）	trong câu hỏi về tim/triệu chứng là "palpitations"; chỉ dịch "nervous" khi rõ là cảm xúc
+chàm | bệnh chàm	eczema	湿疹
+tổ đỉa | bệnh tổ đỉa	dyshidrotic eczema (pompholyx)	汗疱疹
+rò luân nhĩ | lỗ rò luân nhĩ	preauricular sinus (preauricular fistula)	耳前瘘管
+tụ dịch màng nuôi | tụ máu màng nuôi | tụ dịch dưới màng nuôi	subchorionic hematoma (subchorionic fluid collection)	绒毛膜下血肿
+u mầm lông	pilomatricoma	毛母质瘤
+ma túy đá	crystal methamphetamine	冰毒
+hở van tim | hở van	heart valve regurgitation	心脏瓣膜反流（关闭不全）
+hở van hai lá	mitral regurgitation	二尖瓣反流
+hở van ba lá	tricuspid regurgitation	三尖瓣反流
+còi xương	rickets	佝偻病
+lạc nội mạc tử cung | lạc nội mạc	endometriosis	子宫内膜异位症
+u lạc nội mạc | nang lạc nội mạc | u lạc nội mạc tử cung	endometrioma (chocolate cyst)	卵巢子宫内膜异位囊肿（巧克力囊肿）
+đinh lăng | lá đinh lăng	Polyscias fruticosa (Ming aralia)	南洋参
+đái rắt | tiểu rắt	frequent urination with small amounts (urinary frequency)	尿频（尿频尿急）
+khớp vành | đường khớp vành	coronal suture (skull)	冠状缝	đường khớp sọ của trẻ, KHÔNG phải động mạch vành
+bạch cầu ưa axit | bạch cầu ưa acid | ưa axit | bạch cầu ái toan	eosinophils	嗜酸性粒细胞
+bạch cầu ưa kiềm | bạch cầu ái kiềm	basophils	嗜碱性粒细胞
+bạch cầu trung tính	neutrophils	中性粒细胞
+bạch cầu lympho	lymphocytes	淋巴细胞
+hạt ngọc dương vật | hạt ngọc	pearly penile papules	阴茎珍珠样丘疹
+que cấy tránh thai | que tránh thai | cấy que tránh thai | que cấy	contraceptive implant	皮下埋植避孕剂（避孕棒）
+vòng tránh thai | đặt vòng	intrauterine device (IUD)	宫内节育器（避孕环）
+kiến ba khoang	Paederus dermatitis (rove beetle dermatitis)	隐翅虫皮炎
+u mềm lây	molluscum contagiosum	传染性软疣
+nói ngọng	unclear speech / articulation disorder	口齿不清（构音障碍）	"nói lắp" mới là stuttering
+nói lắp | nói cà lăm	stuttering	口吃
+giãn phế nang	emphysema	肺气肿
+giãn phế quản	bronchiectasis	支气管扩张
+manh tràng	cecum	盲肠
+bướu huyết thanh	caput succedaneum	产瘤（头皮水肿）
+thụ tinh nhân tạo | bơm tinh trùng | =IUI	intrauterine insemination (IUI, artificial insemination)	宫腔内人工授精（IUI）	KHÁC thụ tinh trong ống nghiệm (IVF)
+thụ tinh trong ống nghiệm | =IVF	in vitro fertilization (IVF)	体外受精（试管婴儿，IVF）
+lợi trùm | viêm lợi trùm | lợi trùm răng khôn	pericoronitis	智齿冠周炎
+ép ngang	side splits (stretching)	横叉	động tác giãn cơ (võ, múa), KHÔNG phải nghiệm pháp ép
+ép dọc	front splits (stretching)	竖叉
+=F0	confirmed COVID-19 case (F0)	新冠确诊病例（F0）
+=F1	close contact of a COVID-19 case (F1)	新冠密切接触者（F1）
+đau dạ dày	stomach pain	胃痛	triệu chứng — KHÔNG đổi thành gastritis/peptic ulcer
+đi ngoài ra | đi ngoài phân | đi ngoài nhiều | đi ngoài lỏng	bowel movement / passing stool	排便	"đi ngoài nhiều lần, phân lỏng" mới là diarrhea
+sổ mũi	runny nose	流鼻涕
+chậm kinh | trễ kinh | chậm kinh nguyệt	late period (delayed menstruation)	月经推迟	KHÔNG phải amenorrhea (vô kinh)
+vô kinh	amenorrhea	闭经
+tim đập nhanh	rapid heartbeat	心跳加快	triệu chứng — không tự đổi thành tachycardia
+hoa mắt	blurred vision / seeing spots (often with dizziness)	眼花
+xây xẩm | xây xẩm mặt mày	light-headedness	头晕眼花
+nhiệt miệng	mouth ulcers (aphthous ulcers)	口腔溃疡
+zona | zona thần kinh | giời leo	shingles (herpes zoster)	带状疱疹
+thủy đậu	chickenpox (varicella)	水痘
+quai bị	mumps	流行性腮腺炎
+sùi mào gà	genital warts (condyloma acuminatum)	尖锐湿疣
+lậu | bệnh lậu	gonorrhea	淋病
+giang mai	syphilis	梅毒
+men gan	liver enzymes (transaminases)	肝酶（转氨酶）
+khí hư | huyết trắng	vaginal discharge (leukorrhea)	白带
+ợ chua	acid regurgitation (sour belching)	反酸
+trào ngược dạ dày thực quản | trào ngược dạ dày	gastroesophageal reflux disease (GERD)	胃食管反流病
+tai biến mạch máu não | đột quỵ	stroke	脑卒中（中风）
+thiếu máu não | thiếu máu lên não	cerebral hypoperfusion (insufficient blood supply to the brain)	脑供血不足
+rối loạn tiền đình	vestibular disorder	前庭功能障碍
+rối loạn thần kinh thực vật	autonomic dysfunction	植物神经功能紊乱
+thoát vị đĩa đệm	herniated disc	椎间盘突出
+đục thủy tinh thể | cườm khô	cataract	白内障
+tăng nhãn áp | cườm nước | glôcôm	glaucoma	青光眼
+mộng mắt	pterygium	翼状胬肉
+lẹo mắt | chắp lẹo | mắt lẹo	stye (hordeolum)	麦粒肿
+lác mắt | lé mắt	strabismus	斜视
+nhược thị	amblyopia	弱视
+hắc lào	tinea (ringworm)	癣（体癣）
+lang ben	tinea versicolor	花斑癣
+ốm nghén | nghén	morning sickness	孕吐（妊娠反应）
+sản dịch	lochia	恶露
+tắc tia sữa	blocked milk duct	乳腺管堵塞（堵奶）
+vàng da sơ sinh	neonatal jaundice	新生儿黄疸
+hăm tã	diaper rash	尿布疹
+tưa lưỡi	oral thrush	鹅口疮
+rôm sảy	miliaria (heat rash)	痱子
+chàm sữa	infantile eczema	婴儿湿疹
+sôi bụng	stomach rumbling (borborygmi)	肠鸣
+tức ngực	chest tightness	胸闷
+hụt hơi	shortness of breath	气短
+nôn khan	dry heaving (retching)	干呕
+u xơ tử cung	uterine fibroids	子宫肌瘤
+buồng trứng đa nang	polycystic ovary syndrome (PCOS)	多囊卵巢综合征
+tinh hoàn ẩn	undescended testis (cryptorchidism)	隐睾
+giãn tĩnh mạch thừng tinh	varicocele	精索静脉曲张
+tràn dịch màng tinh hoàn	hydrocele	鞘膜积液
+hẹp bao quy đầu	phimosis	包茎
+dài bao quy đầu	redundant prepuce	包皮过长
+xuất tinh sớm	premature ejaculation	早泄
+rối loạn cương dương | liệt dương	erectile dysfunction	勃起功能障碍（阳痿）
+viêm lộ tuyến | viêm lộ tuyến cổ tử cung	cervical ectropion (cervical erosion)	宫颈糜烂（宫颈柱状上皮异位）
+trùng roi	trichomoniasis (Trichomonas)	滴虫性阴道炎（滴虫）
+lao màng phổi	tuberculous pleurisy	结核性胸膜炎
+tràn dịch màng phổi	pleural effusion	胸腔积液
+ứ nước thận | thận ứ nước	hydronephrosis	肾积水
+giãn đài bể thận	dilation of the renal pelvis and calyces	肾盂肾盏扩张
+gan nhiễm mỡ	fatty liver	脂肪肝
+tay chân miệng	hand, foot and mouth disease	手足口病
+sốt xuất huyết	dengue fever	登革热
+tăng động	attention deficit hyperactivity disorder (ADHD)	注意力缺陷多动障碍（多动症）
+tự kỷ	autism	自闭症
+động kinh	epilepsy	癫痫
+sốt cao co giật	febrile seizure	高热惊厥
+đau thần kinh tọa	sciatica	坐骨神经痛
+bủn rủn | bủn rủn chân tay | chân tay bủn rủn	weakness and shakiness in the limbs	手脚发软无力
+sụp mí	ptosis (drooping eyelid)	上睑下垂
+gai cột sống	spinal bone spurs (osteophytes)	骨刺（骨质增生）
+gai đôi cột sống	spina bifida	脊柱裂
+mụn thịt	skin tags (acrochordons)	皮赘
+mụn cóc	warts	疣
+mụn rộp	herpes (cold sores)	疱疹
+mề đay | nổi mề đay	urticaria (hives)	荨麻疹
+sẹo lồi	keloid	瘢痕疙瘩
+nám | nám da	melasma	黄褐斑
+tàn nhang	freckles	雀斑
+vết bớt | bớt đỏ | bớt xanh | bớt bẩm sinh	birthmark	胎记
+viêm da cơ địa	atopic dermatitis	特应性皮炎
+vảy nến	psoriasis	银屑病
+hồng cầu nhỏ nhược sắc	microcytic hypochromic (red blood cells)	小细胞低色素
+tan máu bẩm sinh | thalassemia	thalassemia	地中海贫血
+mổ đẻ | sinh mổ	cesarean section	剖宫产
+dọa sảy thai | doạ sảy	threatened miscarriage	先兆流产
+thai ngoài tử cung | chửa ngoài tử cung	ectopic pregnancy	宫外孕（异位妊娠）
+thai trứng | chửa trứng	hydatidiform mole (molar pregnancy)	葡萄胎
+rong kinh	prolonged menstrual bleeding (menorrhagia)	经期延长（月经过多）
+tiền sản giật	preeclampsia	子痫前期
+tiểu đường thai kỳ | đái tháo đường thai kỳ	gestational diabetes	妊娠期糖尿病
+cận thị	myopia	近视
+loạn thị	astigmatism	散光
+viễn thị	hyperopia	远视
+ù tai	tinnitus	耳鸣
+viêm nha chu	periodontitis	牙周炎
+viêm tủy | viêm tủy răng	pulpitis	牙髓炎
+cao răng	dental calculus (tartar)	牙结石
+niềng răng	orthodontic braces	牙齿矫正
+tẩy giun	deworming	驱虫
+sán lá gan	liver fluke	肝吸虫
+nổi hạch	swollen lymph nodes	淋巴结肿大
+bướu cổ	goiter	甲状腺肿
+nhân giáp | nhân tuyến giáp | nhân giáp trạng	thyroid nodule	甲状腺结节
+suy giáp	hypothyroidism	甲状腺功能减退（甲减）
+cường giáp	hyperthyroidism	甲状腺功能亢进（甲亢）
+loãng xương	osteoporosis	骨质疏松
+no-spa | nospa	No-Spa (drotaverine)	No-Spa（屈他维林）
+duphaston	Duphaston (dydrogesterone)	Duphaston（地屈孕酮）
+utrogestan	Utrogestan (micronized progesterone)	Utrogestan（黄体酮）
+augmentin	Augmentin (amoxicillin-clavulanate)	Augmentin（阿莫西林克拉维酸钾）
+glucophage | glucofage	Glucophage (metformin)	Glucophage（二甲双胍）
+gastropulgite | gastropugite	Gastropulgite (attapulgite)	Gastropulgite（凹凸棒石）
+smecta	Smecta (diosmectite)	思密达（蒙脱石散）
+alphachoay | alpha choay | alphachymotrypsin | alpha chymotrypsin	alpha-chymotrypsin (Alphachoay)	α-糜蛋白酶
+panadol | hapacol | efferalgan	paracetamol (Panadol / Hapacol / Efferalgan)	对乙酰氨基酚
+berberin	berberine	黄连素（小檗碱）
+oresol	oral rehydration salts (Oresol)	口服补液盐
+fugacar	Fugacar (mebendazole)	Fugacar（甲苯咪唑）
+postinor	Postinor (levonorgestrel emergency contraceptive)	Postinor（左炔诺孕酮紧急避孕药）
+=6 trong 1 | 6in1 | 6 in 1	hexavalent (6-in-1) vaccine	六联疫苗
+=5 trong 1 | 5in1 | 5 in 1	pentavalent (5-in-1) vaccine	五联疫苗
+uốn ván	tetanus	破伤风

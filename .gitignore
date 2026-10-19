@@ -1,0 +1,31 @@
+# Dữ liệu và kết quả: chia sẻ qua Kaggle Datasets / Drive, không đưa lên GitHub
+corpus_out/
+corpus_out_*/
+results/
+build/
+data/
+runs/
+chunks/
+emb/
+index/
+qtrans/
+qemb/
+eval/
+submissions/
+*.parquet
+*.npy
+*.npz
+*.zip
+
+# Tài liệu nội bộ của nhóm (gửi qua Drive)
+/*.pdf
+/*.docx
+
+# Bí mật
+kaggle.json
+.env
+
+# Python / Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

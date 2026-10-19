@@ -25,7 +25,7 @@ import pyarrow.parquet as pq
 from . import XV
 from .store import PAGE_SCHEMA, find_parts, now_iso, status_rank
 
-_SEPS = (" | ", " - ", " – ", " — ", " _ ", "_", " :: ", " » ", " · ", "--", "-", "|")
+_SEPS = (" | ", " • ", " - ", " – ", " — ", " _ ", "_", " :: ", " » ", " · ", "--", "-", "|")
 _P1 = ["id", "url", "host", "status", "xv", "processed_at", "n_chars", "text_hash", "title", "lang", "doc_type",
        "published", "author", "keywords", "site_name"]
 

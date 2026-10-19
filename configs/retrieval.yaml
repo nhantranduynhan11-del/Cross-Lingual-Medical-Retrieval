@@ -56,7 +56,12 @@ translate:                               # dịch câu hỏi vi → en → zh b�
   models:                                # so sánh; tên ngắn → id Hugging Face
     qwen25_14b: "Qwen/Qwen2.5-14B-Instruct"
     qwen3_8b: "Qwen/Qwen3-8B"            # Qwen3 không có bản 7B; 8B là bản gần nhất
-  use: qwen25_14b                        # bản dịch dùng cho nhánh en/zh (chọn sau khi so sánh)
+    qwen3_14b: "Qwen/Qwen3-14B"
+  use: qwen25_14b                        # bản dịch cho nhánh en/zh = thư mục trong qtrans/ (vd qwen25_14b, qwen3_14b-t2)
+  prompt: t2                             # t1 = bản 15/10 (kết quả ở qtrans/<model>); t2 = sửa theo lỗi đã gặp (qtrans/<model>-t2)
+  glossary: configs/med_glossary_vi.tsv  # gợi ý thuật ngữ cho t2 (đi kèm mã)
+  glossary_max: 10
+  thinking: false                        # Qwen3: true = bật chế độ suy nghĩ (chậm hơn nhiều; thử LIMIT nhỏ trước)
   quant: "4bit"                          # 4bit (bitsandbytes) để mỗi GPU T4 chạy một bản model
   batch: 8
   max_new_tokens: 512
@@ -75,11 +80,15 @@ fuse:
   depth: 1000
   configs:                               # tên → danh sách run ("tên*w" = trọng số w)
     rrf9: [vi_dense, vi_lsr, vi_bm25, en_dense, en_lsr, en_bm25, zh_dense, zh_lsr, zh_bm25]
+    # BASELINE (19/10/2026): en_lsr, en_bm25 trọng số 0,5 — tốt hơn rrf9 ở doc/unit F2@5–20, cùng dấu ở 2 nửa tập có
+    # nhãn (40 câu, nhãn LLM); bỏ hẳn hai nhánh (rrf7) làm giảm Recall@50 → giữ nhưng giảm trọng số
+    rrf9_w: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25]
     rrf_vi: [vi_dense, vi_lsr, vi_bm25]
     rrf_dense3: [vi_dense, en_dense, zh_dense]
 
 rerank:
-  method: colbert                        # colbert (multi-vector BGE-M3) | cross (cross-encoder)
+  method: cross                          # BASELINE: cross (bge-reranker-v2-m3; hơn rrf9 có ý nghĩa, cùng dấu 2 nửa) | colbert
+                                         # (multi-vector BGE-M3; không hơn rrf9 trên tập có nhãn)
   cross_model: "BAAI/bge-reranker-v2-m3"
   top_n: 400                             # F2 tính theo TẬP → xếp hạng lại chỉ có ích khi top_n > k_chunk
   match_lang: true                       # đoạn zh chấm bằng câu hỏi zh, đoạn en bằng câu en (thiếu bản dịch → câu vi)

@@ -39,9 +39,11 @@ RATE_RULES = [
     {"suffix": "youlai.cn", "group": "youlai.cn", "workers": 4, "delay": 0.3, "timeout": 8, "retries": 0,
      "backoff_on_timeout": False},
     {"suffix": "qihuangzhishu.com", "group": "qihuangzhishu.com", "workers": 1, "delay": 1.0, "retries": 1},
-    # nhathuoclongchau: Cloudflare cấm IP ~13 giờ (429 + Retry-After ~47.000 s) sau khoảng 500 trang gọi ở ~0,6 trang/s
-    # (cả IP Kaggle lẫn IP Việt Nam, 12/10/2026) → 1 kết nối, nghỉ ~8 s; điều tốc không được tự tăng.
-    {"suffix": "nhathuoclongchau.com.vn", "group": "nhathuoclongchau.com.vn", "workers": 1, "delay": 8.0},
+    # nhathuoclongchau: Cloudflare giới hạn số yêu cầu / phút trên MỘT IP; vượt là cấm IP ~13 giờ (429 + Retry-After
+    # ~47.000 s). Đo thực tế (12–14/10/2026): 1 kết nối, nghỉ ~8 s → chạy ổn nhiều giờ; tốc độ thường → bị cấm ngay.
+    # jitter 0.15: khoảng nghỉ 6,8–9,2 s (không có lúc gọi sát nhau). Chỉnh riêng: --host-delay nhathuoclongchau.com.vn=6
+    {"suffix": "nhathuoclongchau.com.vn", "group": "nhathuoclongchau.com.vn", "workers": 1, "delay": 8.0,
+     "jitter": 0.15},
     # dantri: 429 rồi từ chối kết nối khi gọi dày (cả Kaggle lẫn máy nhà).
     {"suffix": "dantri.com.vn", "group": "dantri.com.vn", "workers": 1, "delay": 4.0},
     {"suffix": "baidu.com", "group": "baidu.com", "workers": 1, "delay": 3.0},
@@ -69,8 +71,9 @@ def outcome(status):
 
 class HostCtl:
     def __init__(self, name, max_conns, delay, timeout, retries, fail_threshold=12, cooldown=300, max_strikes=3,
-                 backoff_on_timeout=True):
+                 backoff_on_timeout=True, jitter=0.5):
         self.name, self.max = name, max(1, max_conns)
+        self.jitter = jitter                    # nghỉ = delay × (1 ± jitter), ngẫu nhiên đều
         self.backoff_on_timeout = backoff_on_timeout
         self.limit = max(1, (self.max + 1) // 2)
         self.base_delay = self.delay = delay
@@ -105,7 +108,13 @@ class HostCtl:
         else:
             self.pause_until = time.monotonic() + seconds
             self.limit = 1
-            log(f"[TẠM DỪNG] {self.name}: trang báo cấm {seconds / 60:.0f} phút (Retry-After) → nghỉ đúng chừng đó.")
+            # nhịp hiện tại vẫn bị cấm → sau khi hết cấm chạy chậm hơn 1,5 lần (tránh bị cấm lại thêm 13 giờ)
+            self.base_delay = self.delay = max(self.delay, self.base_delay, 1.0) * 1.5
+            log(f"[TẠM DỪNG] {self.name}: trang báo cấm {seconds / 60:.0f} phút (Retry-After) → nghỉ đúng chừng đó, "
+                f"sau đó chạy chậm hơn (nghỉ {self.delay:.1f} s).")
+
+    def pause_secs(self):
+        return self.delay * (1 - self.jitter + 2 * self.jitter * random.random())
 
     def release(self, status, log=print):
         self.inflight -= 1

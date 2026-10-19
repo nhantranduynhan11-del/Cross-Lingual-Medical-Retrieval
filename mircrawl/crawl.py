@@ -181,6 +181,8 @@ async def crawl_async(a):
         groups[g].append((i, u, h))
         rules[g] = r
     queues, ctls = {}, {}
+    host_delay = {k.strip().lower(): float(v) for k, v in
+                  (x.split("=", 1) for x in (a.host_delay or "").split(",") if "=" in x)}
     for g, lst in groups.items():
         random.Random(0).shuffle(lst)
         r = rules[g]
@@ -189,8 +191,13 @@ async def crawl_async(a):
             to, rt = r.get("timeout") or a.timeout, r.get("retries", a.retries)
         else:
             k, d, to, rt = (a.per_host_big if len(lst) >= a.big_host else a.per_host), a.delay, a.timeout, a.retries
+        hd = next((v for suf, v in host_delay.items() if g == suf or g.endswith("." + suf)), None)
+        if hd is not None:                                 # --host-delay: nhịp riêng do người chạy đặt
+            d = hd
+            log(f"  --host-delay: {g} nghỉ {hd}s")
         ctls[g] = HostCtl(g, k, d, to, rt, a.fail_threshold, a.cooldown,
-                          backoff_on_timeout=(r or {}).get("backoff_on_timeout", True))
+                          backoff_on_timeout=(r or {}).get("backoff_on_timeout", True),
+                          jitter=(r or {}).get("jitter", 0.5))
         queues[g] = collections.deque(lst)
     for g in sorted(queues, key=lambda g: -len(queues[g]))[:8]:
         log(f"  nhóm {g}: {len(queues[g]):,} URL, tối đa {ctls[g].max} kết nối, nghỉ {ctls[g].base_delay}s")
@@ -228,7 +235,7 @@ async def crawl_async(a):
                 rec.update(final_url=f.final_url, fetched_at=fetched_at)
                 emit(i, u, h, rec, {"id": i, "url": u, "final_url": f.final_url, "host": h, "charset": f.charset,
                                     "fetched_at": fetched_at, "html": raw} if raw is not None else None)
-            await asyncio.sleep(ctl.delay * (0.5 + random.random()))
+            await asyncio.sleep(ctl.pause_secs())
 
     # ---------------------------------------------------------------- PubMed
     pm_q = collections.deque(pm[k:k + a.pubmed_batch] for k in range(0, len(pm), a.pubmed_batch))

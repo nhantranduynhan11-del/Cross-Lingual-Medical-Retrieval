@@ -194,7 +194,7 @@ def _fold(s):
     return re.sub(r"[^a-z0-9]", "", "".join(c for c in s if not unicodedata.combining(c)))
 
 
-_TITLE_SEPS = (" | ", " - ", " – ", " — ", " _ ", "_", " :: ", " » ", " · ", "--", "-", "|")
+_TITLE_SEPS = (" | ", " • ", " - ", " – ", " — ", " _ ", "_", " :: ", " » ", " · ", "--", "-", "|")
 
 
 def strip_site_suffix(title, site="", host=""):

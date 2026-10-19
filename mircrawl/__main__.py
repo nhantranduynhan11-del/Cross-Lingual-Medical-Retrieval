@@ -41,6 +41,8 @@ def _crawl_args(p, probe=False):
     p.add_argument("--per-host-big", type=int, default=8, help="kết nối tối đa / tên miền lớn")
     p.add_argument("--big-host", type=int, default=5000, help="tên miền có từ bấy nhiêu URL (trong shard) là 'lớn'")
     p.add_argument("--delay", type=float, default=0.2, help="nghỉ (giây) giữa 2 lần gọi của mỗi kết nối")
+    p.add_argument("--host-delay", default="",
+                   help="nhịp nghỉ riêng (giây) cho nhóm tên miền, vd nhathuoclongchau.com.vn=6,dantri.com.vn=3")
     p.add_argument("--slow-scale", type=float, default=1.0, help="nhân nhịp nghỉ của các quy tắc tốc độ riêng")
     p.add_argument("--timeout", type=float, default=25)
     p.add_argument("--retries", type=int, default=2)

@@ -10,6 +10,8 @@ Kết quả: top-N theo điểm mới, nối thêm phần đuôi (hạng > N) c�
 
   python -m mirret.rerank --run runs/rrf9.parquet [--method cross] [--top-n 400] [--shard i/N] --device cuda:0
      → runs/<run>_<method>/part-i-of-N.parquet ; đủ mọi phần → runs/<run>_<method>.parquet
+  Thử nhanh trên bộ nhãn: --qids eval/judge/queries.csv (hoặc "1,2,3") → chỉ các câu đó, tên mặc định
+  <run>_<method>_sub (không đè run đủ 1.200 câu); --name đặt tên khác.
 """
 import argparse
 import time
@@ -156,6 +158,8 @@ def main():
     ap.add_argument("--shard", default="0/1", help="i/N theo câu hỏi (mỗi GPU một phần)")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--out", default=None, help="thư mục ghi kết quả (mặc định: cạnh run gốc)")
+    ap.add_argument("--qids", default=None, help="chỉ các câu này: file qid (.txt/.csv/.parquet) hoặc '1,2,3'")
+    ap.add_argument("--name", default=None, help="tên run kết quả (mặc định <run>_<method>, thêm _sub khi có --qids)")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
     cfg = config.load(a.config)
@@ -163,7 +167,8 @@ def main():
     method = a.method or rc["method"]
     top_n = a.top_n or rc["top_n"]
     run_path = Path(a.run)
-    tag = f"{run_path.stem}_{method}"
+    qids = runs.read_qids(a.qids)
+    tag = a.name or f"{run_path.stem}_{method}" + ("_sub" if qids else "")
     out_dir = Path(a.out) if a.out else run_path.parent
     part_dir = out_dir / tag
     final = out_dir / (tag + ".parquet")
@@ -172,19 +177,22 @@ def main():
     if final.exists() and not a.force:
         print(f"{final} đã có → bỏ qua")
         return
-    base = runs.read(run_path)
+    base = runs.read(run_path, qids=qids)
+    if qids:
+        print(f"--qids: {base['qid'].nunique()}/{len(qids)} câu có trong run → {tag}")
     if not part.exists() or a.force:
         mine = [q for k, q in enumerate(sorted(base["qid"].unique())) if k % sn == si]
         df = base[base["qid"].isin(mine) & (base["rank"] <= top_n)]
         res = rerank(cfg, df, method, a.device)
         runs.write(res, part, {"run": str(run_path), "method": method, "top_n": top_n, "shard": a.shard,
-                               "rerank": rc})
+                               "qids": len(qids) if qids else "all", "rerank": rc})
         print(f"→ {part}")
     parts = sorted(part_dir.glob(f"part-*-of-{sn}.parquet"))
     if len(parts) == sn:
         rr = pd.concat([runs.read(p) for p in parts], ignore_index=True)
         runs.write(with_tail(rr, base, top_n), final, {"run": str(run_path), "method": method, "top_n": top_n,
-                                                      "parts": sn, "tail": "run gốc, hạng > top_n"})
+                                                      "parts": sn, "qids": len(qids) if qids else "all",
+                                                      "tail": "run gốc, hạng > top_n"})
         print(f"đủ {sn} phần → {final}")
     else:
         print(f"đã có {len(parts)}/{sn} phần; chạy các phần còn lại rồi chạy lại lệnh này để gộp")

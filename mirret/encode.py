@@ -1,293 +1,342 @@
-"""Chẩn đoán KHÔNG cần nhãn trên toàn bộ 1.200 câu hỏi: độ trùng giữa các nhánh, đóng góp vào union, thành phần
-và độ nhạy của RRF, thay đổi sau xếp hạng lại.
+"""Mã hoá BGE-M3 cho đoạn cha / đoạn con: dense (CLS chuẩn hoá L2) + lexical weights (LSR). ColBERT chỉ dùng khi
+xếp hạng lại (mirret.rerank), không lưu cho cả kho.
 
-CÁC CHỈ SỐ NÀY ĐO ĐA DẠNG / ẢNH HƯỞNG, KHÔNG ĐO RECALL. Một nhánh thêm nhiều tài liệu "mới" có thể chỉ thêm nhiễu;
-hai nhánh trùng nhau nhiều có thể cùng đúng hoặc cùng sai. Muốn biết nhánh nào tìm được tài liệu ĐÚNG phải dùng tập có
-nhãn (mirret.judge + mirret.evaluate).
+M3Encoder lấy nguyên từ mir/encode.py (đã đối chiếu với FlagEmbedding BGEM3 bằng trọng số thật trên Kaggle):
+  dense  = last_hidden[:, 0] chuẩn hoá L2
+  sparse = relu(sparse_linear(last_hidden)), bỏ token đặc biệt, mỗi token id lấy giá trị lớn nhất
+  colbert= normalize(colbert_linear(last_hidden[:, 1:]))
+Đầu vào mỗi đơn vị: ngữ cảnh + "\\n" + đoạn (C), cắt ở encode.max_length (tính cả <s></s>).
 
-  python -m mirret.diag [--runs vi_dense,…] [--fused rrf9] [--reranked rrf9_colbert] [--ks 10,50,100,200]
-     → eval/diag/diag.md + các bảng CSV
+Chia việc & mã hoá bổ sung:
+  - Danh sách cần mã hoá = mọi đơn vị (theo thứ tự file part, rồi thứ tự dòng) TRỪ các cặp (unit_id, h) đã có trong
+    các thư mục --skip (kết quả mã hoá trước đó). h = hash(ngữ cảnh + đoạn): đoạn đổi nội dung thì được mã hoá lại.
+  - Danh sách chia thành khối encode.block đơn vị; khối k thuộc phần k % N. Mọi máy phải có CÙNG bản chunks và CÙNG
+    --skip thì danh sách mới giống nhau: dấu vân tay (fp) in ra ở đầu và ghi trong tên khối "<fp>-<k>".
+  - Khối xong: emb/<mức>/<fp>-<k>/{dense.npy (float16), sparse.npz (CSR float16), ids.parquet (unit_id, h), _DONE.json}.
+    Chạy lại = bỏ qua khối đã có _DONE; --resume <thư mục>: chép khối đã xong từ output phiên trước.
+
+  python -m mirret.encode plan  --level parents [--skip emb_cũ]
+  python -m mirret.encode run   --level parents --shard 0/6 --device cuda:0 [--skip …] [--resume …]
+  python -m mirret.encode bench --level parents --n 2000 --device cuda:0
 """
 import argparse
-import itertools
-import random
+import hashlib
+import json
+import shutil
+import time
+from pathlib import Path
 
 import numpy as np
-import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-from . import config, fuse, runs
-
-BRANCHES = [f"{lg}_{m}" for lg in ("vi", "en", "zh") for m in ("dense", "lsr", "bm25")]
-
-
-def rbo(a, b, p=0.9):
-    """Rank-biased overlap (Webber 2010), dạng cắt ngắn tới độ sâu min(|a|,|b|) — nặng ký ở đầu danh sách."""
-    k = min(len(a), len(b))
-    if k == 0:
-        return np.nan
-    sa, sb, s = set(), set(), 0.0
-    for d in range(1, k + 1):
-        sa.add(a[d - 1])
-        sb.add(b[d - 1])
-        s += p ** (d - 1) * len(sa & sb) / d
-    return (1 - p) * s
+from . import config
+from .sparse_index import save_csr
 
 
-def boot_ci(x, n=1000, seed=0):
-    x = np.asarray([v for v in x if not np.isnan(v)], dtype=float)
-    if len(x) == 0:
-        return np.nan, np.nan, np.nan
-    rng = np.random.default_rng(seed)
-    m = rng.choice(x, size=(n, len(x)), replace=True).mean(axis=1)
-    return float(x.mean()), float(np.percentile(m, 2.5)), float(np.percentile(m, 97.5))
+# ---------------------------------------------------------------- model (từ mir/encode.py)
+class M3Encoder:
+    def __init__(self, model, tokenizer, sparse_linear, device="cpu", fp16=False, max_length=512, colbert_linear=None):
+        import torch
+        self.torch = torch
+        self.device = torch.device(device)
+        self.half = fp16 and self.device.type == "cuda"
+        self.model = model.to(self.device).eval()
+        self.sparse_linear = sparse_linear.to(self.device).eval()
+        self.colbert_linear = colbert_linear.to(self.device).eval() if colbert_linear is not None else None
+        if self.half:
+            self.model.half()
+            self.sparse_linear.half()
+            if self.colbert_linear is not None:
+                self.colbert_linear.half()
+        self.tok = tokenizer
+        self.max_length = max_length
+        self.vocab = len(tokenizer)
+        self.unused = {tokenizer.cls_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id, tokenizer.unk_token_id}
+
+    @classmethod
+    def load(cls, name, device="cpu", fp16=True, max_length=512, colbert=False):
+        import torch
+        from transformers import AutoModel, AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(name)
+        try:
+            model = AutoModel.from_pretrained(name, attn_implementation="sdpa")
+        except Exception:
+            model = AutoModel.from_pretrained(name)
+        H = model.config.hidden_size
+
+        def head(fname, out_dim):
+            p = Path(name) / fname
+            if not p.is_file():
+                from huggingface_hub import hf_hub_download
+                p = hf_hub_download(name, fname)
+            lin = torch.nn.Linear(H, out_dim)
+            lin.load_state_dict(torch.load(p, map_location="cpu"))
+            return lin
+        return cls(model, tok, head("sparse_linear.pt", 1), device, fp16, max_length,
+                   head("colbert_linear.pt", H) if colbert else None)
+
+    def batches(self, texts, batch_tokens, max_batch, max_length=None):
+        enc = self.tok(texts, truncation=True, max_length=max_length or self.max_length,
+                       add_special_tokens=True)["input_ids"]
+        order = sorted(range(len(texts)), key=lambda i: -len(enc[i]))
+        b = []
+        for i in order:
+            if b and (len(b) + 1 > max_batch or (len(b) + 1) * len(enc[b[0]]) > batch_tokens):
+                yield b, [enc[j] for j in b]
+                b = []
+            b.append(i)
+        if b:
+            yield b, [enc[j] for j in b]
+
+    def colbert(self, texts, max_length=None, batch_tokens=16384, max_batch=128):
+        torch = self.torch
+        out = [None] * len(texts)
+        pad = self.tok.pad_token_id
+        with torch.inference_mode():
+            for idx, ids in self.batches(texts, batch_tokens, max_batch, max_length):
+                L = max(map(len, ids))
+                inp = torch.tensor([x + [pad] * (L - len(x)) for x in ids], device=self.device)
+                mask = (inp != pad).long()
+                h = self.model(input_ids=inp, attention_mask=mask).last_hidden_state
+                v = self.colbert_linear(h[:, 1:]) * mask[:, 1:, None].to(h.dtype)
+                v = torch.nn.functional.normalize(v.float(), dim=-1).cpu().numpy().astype(np.float16)
+                for k, i in enumerate(idx):
+                    out[i] = v[k, :len(ids[k]) - 1]
+        return out
+
+    def encode(self, texts, batch_tokens=16384, max_batch=128, min_weight=0.0):
+        """→ dense float16 [n, H]; sparse list[(token_ids int32 tăng dần, weights float32)]; số đơn vị bị cắt."""
+        torch = self.torch
+        n = len(texts)
+        dense = np.zeros((n, self.model.config.hidden_size), dtype=np.float16)
+        sparse = [None] * n
+        truncated = 0
+        unused = np.array(sorted(self.unused), dtype=np.int64)
+        V = np.int64(self.vocab)
+        pad = self.tok.pad_token_id
+        with torch.inference_mode():
+            for idx, ids in self.batches(texts, batch_tokens, max_batch):
+                L = max(map(len, ids))
+                truncated += sum(1 for x in ids if len(x) >= self.max_length)
+                ids_np = np.full((len(ids), L), pad, dtype=np.int64)
+                for k, x in enumerate(ids):
+                    ids_np[k, :len(x)] = x
+                inp = torch.from_numpy(ids_np).to(self.device)
+                mask = (inp != pad).long()
+                h = self.model(input_ids=inp, attention_mask=mask).last_hidden_state
+                d = torch.nn.functional.normalize(h[:, 0].float(), dim=-1).cpu().numpy().astype(np.float16)
+                w = torch.relu(self.sparse_linear(h)).squeeze(-1).float().cpu().numpy()
+                dense[idx] = d
+                rows, cols = np.nonzero(~np.isin(ids_np, unused) & (w > min_weight))
+                keys = rows.astype(np.int64) * V + ids_np[rows, cols]
+                vals = w[rows, cols]
+                order = np.argsort(keys, kind="stable")
+                keys, vals = keys[order], vals[order]
+                uk, start = np.unique(keys, return_index=True)
+                mx = np.maximum.reduceat(vals, start) if len(vals) else vals
+                r, t = uk // V, (uk % V).astype(np.int32)
+                bounds = np.searchsorted(r, np.arange(len(ids) + 1))
+                for k, i in enumerate(idx):
+                    sparse[i] = (t[bounds[k]:bounds[k + 1]], mx[bounds[k]:bounds[k + 1]])
+        return dense, sparse, truncated
 
 
-def fmt(m, lo, hi, nd=3):
-    return "-" if np.isnan(m) else f"{m:.{nd}f} [{lo:.{nd}f}, {hi:.{nd}f}]"
+def resolve_device(device):
+    """cuda:* khi không có GPU (chạy thử trên máy) → cpu, kèm cảnh báo."""
+    import torch
+    if str(device).startswith("cuda") and not torch.cuda.is_available():
+        print(f"[CẢNH BÁO] không có GPU → chạy trên CPU thay cho {device}")
+        return "cpu"
+    return device
 
 
-def doc_meta(cfg):
-    """{doc_id: lang} từ chunks/parents (nhẹ: chỉ 2 cột)."""
-    import pyarrow.dataset as ds
-    t = ds.dataset(str(cfg.path("chunks") / "parents")).to_table(columns=["doc_id", "lang"]).to_pandas()
-    return dict(zip(t["doc_id"], t["lang"]))
+def unit_input(ctx, text):
+    return (ctx + "\n" + text) if ctx else text
 
 
-def pairwise(lists, names, k, n_boot):
-    rows = []
-    for a, b in itertools.combinations(names, 2):
-        J, O, R = [], [], []
-        for q in set(lists[a]) & set(lists[b]):
-            A, B = lists[a][q][:k], lists[b][q][:k]
-            if not A or not B:
-                continue
-            sa, sb = set(A), set(B)
-            J.append(len(sa & sb) / len(sa | sb))
-            O.append(len(sa & sb) / min(len(sa), len(sb)))
-            R.append(rbo(A, B))
-        rows.append({"a": a, "b": b, "k": k, "n_q": len(J), "jaccard": boot_ci(J, n_boot),
-                     "overlap_coef": boot_ci(O, n_boot), "rbo": boot_ci(R, n_boot)})
-    return rows
-
-
-def union_growth(lists, order, k):
-    """Thêm lần lượt từng nhánh vào union: trung bình |union| và số tài liệu MỚI mỗi bước (theo câu hỏi)."""
-    qs = sorted(set().union(*[set(lists[n]) for n in order]))
-    cur = {q: set() for q in qs}
+# ---------------------------------------------------------------- khối emb
+def done_blocks(dirs, level=None):
+    """Mọi thư mục khối đã xong (_DONE.json) trong các thư mục (tìm đệ quy; lọc theo mức nếu có)."""
     out = []
-    for n in order:
-        new = [len(set(lists[n].get(q, [])[:k]) - cur[q]) for q in qs]
-        for q in qs:
-            cur[q] |= set(lists[n].get(q, [])[:k])
-        out.append({"branch": n, "new_docs_mean": float(np.mean(new)), "union_mean": float(np.mean([len(cur[q]) for q in qs]))})
-    return out
+    for d in ([dirs] if isinstance(dirs, (str, Path)) else dirs or []):
+        for f in Path(d).glob("**/_DONE.json"):
+            if (f.parent / "ids.parquet").exists():
+                m = json.loads(f.read_text(encoding="utf-8"))
+                if level is None or m.get("level") == level:
+                    out.append(f.parent)
+    return sorted(set(out), key=lambda p: p.name)
 
 
-def greedy_order(lists, names, k):
-    order, left = [], list(names)
-    qs = sorted(set().union(*[set(lists[n]) for n in names]))
-    cur = {q: set() for q in qs}
-    while left:
-        best = max(left, key=lambda n: np.mean([len(set(lists[n].get(q, [])[:k]) - cur[q]) for q in qs]))
-        order.append(best)
-        left.remove(best)
-        for q in qs:
-            cur[q] |= set(lists[best].get(q, [])[:k])
-    return order
+def encoded_pairs(dirs, level):
+    """{"unit_id:h"} đã mã hoá trong các thư mục emb."""
+    s = set()
+    for b in done_blocks(dirs, level):
+        t = pq.read_table(b / "ids.parquet", columns=["unit_id", "h"])
+        s.update(f"{u}:{h}" for u, h in zip(t.column("unit_id").to_pylist(), t.column("h").to_pylist()))
+    return s
 
 
-def exclusive(lists, names, k):
-    """Trung bình số tài liệu chỉ MỘT nhánh có trong top-k (không nhánh nào khác có trong top-k của nó)."""
-    out = {}
-    for n in names:
-        v = []
-        for q, L in lists[n].items():
-            others = set().union(*[set(lists[m].get(q, [])[:k]) for m in names if m != n])
-            v.append(len(set(L[:k]) - others))
-        out[n] = float(np.mean(v)) if v else np.nan
-    return out
+def plan(chunk_dir, skip=None):
+    """→ (parts, rows_per_part [np.int32 chỉ số dòng cần mã hoá], tổng, fp)."""
+    parts = sorted(Path(chunk_dir).glob("part-*.parquet"))
+    if not parts:
+        raise SystemExit(f"Không có chunks trong {chunk_dir}")
+    hasher = hashlib.sha1()
+    rows, total = [], 0
+    for p in parts:
+        t = pq.read_table(p, columns=["unit_id", "h"])
+        keys = [f"{u}:{h}" for u, h in zip(t.column("unit_id").to_pylist(), t.column("h").to_pylist())]
+        keep = np.array([i for i, k in enumerate(keys) if not skip or k not in skip], dtype=np.int32)
+        for i in keep.tolist():
+            hasher.update(keys[i].encode("utf-8") + b";")
+        rows.append(keep)
+        total += len(keep)
+    return parts, rows, total, hasher.hexdigest()[:10]
 
 
-def lang_profile(lists, names, k, lang_of):
-    rows = []
-    for n in names:
-        c = {"vi": 0, "zh": 0, "en": 0, "?": 0}
-        tot = 0
-        for q, L in lists[n].items():
-            for d in L[:k]:
-                c[lang_of.get(d, "?") if lang_of.get(d) in c else "?"] += 1
-                tot += 1
-        rows.append({"run": n, **{lg: c[lg] / max(1, tot) for lg in c}, "n_q": len(lists[n]),
-                     "mean_len": tot / max(1, len(lists[n]))})
-    return rows
+_CACHE = {}
 
 
-def composition(fused_lists, branch_lists, names, k, depth):
-    """Với mỗi đơn vị trong top-k của run gộp: bao nhiêu nhánh có nó trong top-depth; tỷ lệ đơn vị chỉ một nhánh có."""
-    support, sole = [], {n: 0 for n in names}
-    share = {n: [] for n in names}
-    for q, L in fused_lists.items():
-        sets = {n: set(branch_lists[n].get(q, [])[:depth]) for n in names}
-        top = L[:k]
-        for u in top:
-            s = [n for n in names if u in sets[n]]
-            support.append(len(s))
-            if len(s) == 1:
-                sole[s[0]] += 1
-        for n in names:
-            share[n].append(len(set(top) & sets[n]) / max(1, len(top)))
-    support = np.array(support)
-    return {"support_hist": {i: float((support == i).mean()) for i in range(0, len(names) + 1)},
-            "sole_share": {n: sole[n] / max(1, len(support)) for n in names},
-            "branch_share": {n: float(np.mean(share[n])) for n in names}}
+def read_block(parts, rows, k, size):
+    """Khối k = vị trí [k*size, (k+1)*size) của chuỗi nối các dòng cần mã hoá → dict cột."""
+    lo, hi, pos, tabs = k * size, (k + 1) * size, 0, []
+    for p, r in zip(parts, rows):
+        a, b = max(lo, pos), min(hi, pos + len(r))
+        if a < b:
+            if _CACHE.get("path") != p:
+                _CACHE.clear()
+                _CACHE.update(path=p, table=pq.read_table(p, columns=["unit_id", "h", "ctx", "text"]))
+            tabs.append(_CACHE["table"].take(pa.array(r[a - pos:b - pos])))
+        pos += len(r)
+    if not tabs:
+        return {c: [] for c in ("unit_id", "h", "ctx", "text")}
+    return pa.concat_tables(tabs).to_pydict()
 
 
-def loo(branch_runs, names, rrf_k, depth, k, n_boot):
-    """Bỏ từng nhánh khỏi RRF: top-k thay đổi bao nhiêu (Jaccard, RBO với RRF đủ nhánh) — mức ẢNH HƯỞNG, không phải giá trị."""
-    full = runs.topk_lists(fuse.rrf([branch_runs[n] for n in names], rrf_k, depth), k, "unit")
-    rows = []
-    for n in names:
-        rest = [m for m in names if m != n]
-        part = runs.topk_lists(fuse.rrf([branch_runs[m] for m in rest], rrf_k, depth), k, "unit")
-        J = [len(set(full[q]) & set(part.get(q, []))) / max(1, len(set(full[q]) | set(part.get(q, [])))) for q in full]
-        R = [rbo(full[q], part.get(q, [])) for q in full]
-        rows.append({"removed": n, "jaccard_vs_full": boot_ci(J, n_boot), "rbo_vs_full": boot_ci(R, n_boot)})
-    return rows
+def write_block(out, ids, hs, dense, sparse, vocab, meta):
+    tmp = out.with_name(out.name + ".tmp")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    np.save(tmp / "dense.npy", dense)
+    indptr = np.zeros(len(sparse) + 1, dtype=np.int64)
+    indptr[1:] = np.cumsum([len(t) for t, _ in sparse])
+    indices = np.concatenate([t for t, _ in sparse]) if sparse else np.zeros(0, np.int32)
+    data = np.concatenate([v for _, v in sparse]) if sparse else np.zeros(0, np.float32)
+    save_csr(tmp / "sparse.npz", indptr, indices, data, vocab)
+    pq.write_table(pa.table({"unit_id": pa.array(ids, pa.string()), "h": pa.array(hs, pa.string())}),
+                   tmp / "ids.parquet")
+    (tmp / "_DONE.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    if out.exists():
+        shutil.rmtree(out)
+    tmp.rename(out)
 
 
-def rrf_k_sensitivity(branch_runs, names, depth, k):
-    base = runs.topk_lists(fuse.rrf([branch_runs[n] for n in names], 60, depth), k, "unit")
-    out = {}
-    for kk in (10, 30, 100):
-        alt = runs.topk_lists(fuse.rrf([branch_runs[n] for n in names], kk, depth), k, "unit")
-        out[kk] = float(np.mean([len(set(base[q]) & set(alt.get(q, []))) / max(1, len(base[q])) for q in base]))
-    return out
-
-
-def rerank_change(before, after, k):
-    J, tau = [], []
-    from scipy.stats import kendalltau
-    for q, A in before.items():
-        B = after.get(q, [])
-        if not B:
+def run(enc, cfg, level, shard="0/1", skip=None, resume=None, log=print):
+    ec = cfg["encode"]
+    chunk_dir = cfg.path("chunks") / level
+    out_root = cfg.path("emb") / level
+    out_root.mkdir(parents=True, exist_ok=True)
+    skipset = encoded_pairs(skip, level) if skip else None
+    parts, rows, total, fp = plan(chunk_dir, skipset)
+    size = ec["block"]
+    n_blocks = -(-total // size)
+    si, sn = (int(x) for x in shard.split("/"))
+    mine = [k for k in range(n_blocks) if k % sn == si]
+    log(f"[{level}] cần mã hoá {total:,} đơn vị (đã bỏ {len(skipset or ()):,} có sẵn) → {n_blocks} khối, "
+        f"dấu vân tay {fp}; phần {shard}: {len(mine)} khối")
+    prev = {b.name: b for b in done_blocks(resume, level)} if resume else {}
+    for k in mine:
+        name = f"{fp}-{k:04d}"
+        out = out_root / name
+        if (out / "_DONE.json").exists():
             continue
-        J.append(len(set(A[:k]) & set(B[:k])) / max(1, len(set(A[:k]) | set(B[:k]))))
-        common = [u for u in A[:k] if u in set(B[:k])]
-        if len(common) >= 3:
-            pa = {u: i for i, u in enumerate(A)}
-            pb = {u: i for i, u in enumerate(B)}
-            t = kendalltau([pa[u] for u in common], [pb[u] for u in common]).statistic
-            tau.append(t)
-    return boot_ci(J), boot_ci(tau)
+        if name in prev:
+            shutil.copytree(prev[name], out)
+            log(f"  chép khối đã xong {name} từ {prev[name]}")
+            continue
+        t0 = time.time()
+        b = read_block(parts, rows, k, size)
+        dense, sparse, trunc = enc.encode([unit_input(c, t) for c, t in zip(b["ctx"], b["text"])],
+                                          ec["batch_tokens"], ec["max_batch"])
+        sec = time.time() - t0
+        meta = {"level": level, "fp": fp, "block": k, "n_blocks": n_blocks, "n": len(b["unit_id"]),
+                "seconds": round(sec, 1), "truncated": trunc, "nnz": int(sum(len(t) for t, _ in sparse)),
+                "model": ec["model"], "max_length": ec["max_length"], "fp16": enc.half}
+        write_block(out, b["unit_id"], b["h"], dense, sparse, enc.vocab, meta)
+        log(f"  khối {name}: {meta['n']:,} đơn vị, {sec:.0f}s ({meta['n'] / max(sec, 1e-9):.0f}/s), "
+            f"bị cắt {trunc}, nnz/đơn vị {meta['nnz'] / max(1, meta['n']):.0f}")
+
+
+def encode_texts(enc, ids, texts, path, batch_tokens=16384):
+    """Câu hỏi → npz: qids, dense float32, sparse CSR (indptr, indices, data)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dense, sparse, trunc = enc.encode(texts, batch_tokens=batch_tokens)
+    indptr = np.concatenate([[0], np.cumsum([len(t) for t, _ in sparse])]).astype(np.int64)
+    np.savez(path, qids=np.array(ids, dtype=np.int64), dense=dense.astype(np.float32), indptr=indptr,
+             indices=np.concatenate([t for t, _ in sparse] + [np.zeros(0, np.int32)]).astype(np.int32),
+             data=np.concatenate([w for _, w in sparse] + [np.zeros(0, np.float32)]).astype(np.float32),
+             truncated=np.array(trunc))
+    return path
+
+
+def load_qemb(path):
+    z = np.load(path)
+    sp = [(z["indices"][a:b], z["data"][a:b]) for a, b in zip(z["indptr"][:-1], z["indptr"][1:])]
+    return [int(q) for q in z["qids"]], z["dense"], sp
+
+
+def bench(enc, cfg, level, n=2000, log=print):
+    ec = cfg["encode"]
+    parts, rows, total, fp = plan(cfg.path("chunks") / level)
+    b = read_block(parts, rows, 0, n)
+    texts = [unit_input(c, t) for c, t in zip(b["ctx"], b["text"])]
+    enc.encode(texts[:64], ec["batch_tokens"], ec["max_batch"])
+    torch = enc.torch
+    if enc.device.type == "cuda":
+        torch.cuda.synchronize(enc.device)
+    t0 = time.time()
+    dense, sparse, trunc = enc.encode(texts, ec["batch_tokens"], ec["max_batch"])
+    if enc.device.type == "cuda":
+        torch.cuda.synchronize(enc.device)
+    sec = time.time() - t0
+    rate = len(texts) / sec
+    nnz = sum(len(t) for t, _ in sparse) / len(texts)
+    res = {"level": level, "n": len(texts), "per_s": round(rate, 1), "truncated": trunc,
+           "total_units": total, "est_gpu_hours_1gpu": round(total / rate / 3600, 2),
+           "est_storage_gb": round(total * (dense.shape[1] * 2 + nnz * 6) / 1e9, 1)}
+    log(json.dumps(res, ensure_ascii=False, indent=1))
+    return res
 
 
 def main():
     config.stdout_utf8()
     ap = argparse.ArgumentParser()
+    ap.add_argument("cmd", choices=["plan", "run", "bench"])
     ap.add_argument("--config", default=None)
-    ap.add_argument("--runs", default=",".join(BRANCHES))
-    ap.add_argument("--fused", default="rrf9")
-    ap.add_argument("--reranked", default="", help="run sau xếp hạng lại (phẩy ngăn cách), so với --fused")
-    ap.add_argument("--ks", default="10,50,100,200")
-    ap.add_argument("--depth", type=int, default=200, help="độ sâu mỗi nhánh dùng cho RRF/thành phần")
-    ap.add_argument("--sample", type=int, default=0, help="chỉ N câu hỏi ngẫu nhiên (nhanh hơn)")
+    ap.add_argument("--level", default="parents", choices=["parents", "children"])
+    ap.add_argument("--shard", default="0/1")
+    ap.add_argument("--skip", default="", help="thư mục emb đã có (phẩy ngăn cách): chỉ mã hoá phần mới/đổi")
+    ap.add_argument("--resume", default="", help="thư mục output phiên trước: chép khối đã xong")
+    ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--n", type=int, default=2000)
     a = ap.parse_args()
     cfg = config.load(a.config)
-    rdir = cfg.path("runs")
-    out = cfg.path("eval") / "diag"
-    out.mkdir(parents=True, exist_ok=True)
-    ks = [int(x) for x in a.ks.split(",")]
-    kmax = max(ks + [a.depth])
-    nb = cfg["eval"]["bootstrap"]
-    names = [n for n in a.runs.split(",") if (rdir / f"{n}.parquet").exists()]
-    missing = [n for n in a.runs.split(",") if n not in names]
-    br = {n: runs.read(rdir / f"{n}.parquet", depth=kmax) for n in names}
-    if a.sample:
-        qs = sorted(set().union(*[set(df["qid"]) for df in br.values()]))
-        keep = set(random.Random(cfg["seed"]).sample(qs, min(a.sample, len(qs))))
-        br = {n: df[df["qid"].isin(keep)] for n, df in br.items()}
-    docs = {n: runs.topk_lists(df, kmax, "doc") for n, df in br.items()}
-    units = {n: runs.topk_lists(df, kmax, "unit") for n, df in br.items()}
-    lang_of = doc_meta(cfg)
-    L = ["# Chẩn đoán không cần nhãn (diag)", "",
-         "> Các chỉ số dưới đây đo **độ đa dạng / mức ảnh hưởng** giữa các nhánh trên toàn bộ câu hỏi. "
-         "**Không phải Recall**: tài liệu \"mới\" hay \"chỉ một nhánh có\" chưa chắc đã đúng. "
-         "Kết luận về Recall/Precision chỉ lấy từ tập có nhãn thủ công (mirret.evaluate).", "",
-         f"Nhánh có run: {', '.join(names)}" + (f" · THIẾU: {', '.join(missing)}" if missing else ""),
-         "Khoảng trong ngoặc: KTC 95% bootstrap theo câu hỏi.", ""]
-    # 1. phủ & ngôn ngữ
-    L += ["## 1. Độ phủ và ngôn ngữ tài liệu trong top-k (cấp tài liệu)", "",
-          "| run | số câu có kết quả | số tài liệu TB (top-" + str(ks[-1]) + ") | vi | zh | en |", "|---|---:|---:|---:|---:|---:|"]
-    for r in lang_profile(docs, names, ks[-1], lang_of):
-        L.append(f"| {r['run']} | {r['n_q']} | {r['mean_len']:.0f} | {r['vi']:.0%} | {r['zh']:.0%} | {r['en']:.0%} |")
-    # 2. trùng cặp
-    for k in ks[:3]:
-        rows = pairwise(docs, names, k, nb)
-        pd.DataFrame([{**{x: r[x] for x in ("a", "b", "k", "n_q")}, "jaccard": r["jaccard"][0],
-                       "overlap_coef": r["overlap_coef"][0], "rbo": r["rbo"][0]} for r in rows]
-                     ).to_csv(out / f"pairwise_doc_k{k}.csv", index=False)
-        M = pd.DataFrame(index=names, columns=names, dtype=float)
-        for r in rows:
-            M.loc[r["a"], r["b"]] = M.loc[r["b"], r["a"]] = r["overlap_coef"][0]
-        L += ["", f"## 2. Tỷ lệ tài liệu chung giữa hai nhánh, top-{k} (overlap coefficient, cấp tài liệu)", "",
-              "| | " + " | ".join(names) + " |", "|---|" + "---:|" * len(names)]
-        for n in names:
-            L.append(f"| {n} | " + " | ".join("—" if n == m else f"{M.loc[n, m]:.2f}" for m in names) + " |")
-    # 3. union
-    k = ks[1] if len(ks) > 1 else ks[0]
-    g = greedy_order(docs, names, k)
-    L += ["", f"## 3. Union các nhánh (top-{k} tài liệu mỗi nhánh)", "",
-          "Thứ tự cố định (vi → en → zh) và thứ tự tham lam (mỗi bước chọn nhánh thêm nhiều tài liệu MỚI nhất). "
-          "\"Mới\" ≠ \"đúng\".", "", "| bước | nhánh (cố định) | tài liệu mới TB | |union| TB | nhánh (tham lam) | mới TB | |union| TB |",
-          "|---:|---|---:|---:|---|---:|---:|"]
-    for i, (x, y) in enumerate(zip(union_growth(docs, names, k), union_growth(docs, g, k)), 1):
-        L.append(f"| {i} | {x['branch']} | {x['new_docs_mean']:.1f} | {x['union_mean']:.1f} | {y['branch']} | "
-                 f"{y['new_docs_mean']:.1f} | {y['union_mean']:.1f} |")
-    ex = exclusive(docs, names, k)
-    L += ["", f"Tài liệu chỉ một nhánh có trong top-{k} (TB/câu): " +
-          ", ".join(f"{n} {v:.1f}" for n, v in sorted(ex.items(), key=lambda x: -x[1]))]
-    # 4. thành phần & độ nhạy của RRF
-    if names:
-        fused_name = a.fused
-        fp = rdir / f"{fused_name}.parquet"
-        fused = runs.read(fp, depth=kmax) if fp.exists() else fuse.rrf([br[n] for n in names], cfg["fuse"]["rrf_k"],
-                                                                         a.depth)
-        if a.sample:
-            fused = fused[fused["qid"].isin(set().union(*[set(df["qid"]) for df in br.values()]))]
-        fl = runs.topk_lists(fused, kmax, "unit")
-        kc = ks[1] if len(ks) > 1 else ks[0]
-        c = composition(fl, units, names, kc, a.depth)
-        L += ["", f"## 4. Thành phần của {fused_name} (top-{kc} đoạn, nhánh xét tới top-{a.depth})", "",
-              "Số nhánh cùng có một đoạn: " + ", ".join(f"{i} nhánh {v:.0%}" for i, v in c["support_hist"].items() if v),
-              "", "| nhánh | tỷ lệ top-k của run gộp có trong nhánh | tỷ lệ đoạn CHỈ nhánh này đưa vào |", "|---|---:|---:|"]
-        for n in names:
-            L.append(f"| {n} | {c['branch_share'][n]:.0%} | {c['sole_share'][n]:.1%} |")
-        lo = loo(br, names, cfg["fuse"]["rrf_k"], a.depth, kc, nb)
-        L += ["", f"## 5. Bỏ từng nhánh khỏi RRF (top-{kc}): mức thay đổi so với RRF đủ nhánh", "",
-              "Thay đổi lớn = nhánh có ẢNH HƯỞNG lớn lên danh sách cuối — chưa nói là tốt hay xấu.", "",
-              "| bỏ nhánh | Jaccard với RRF đủ | RBO với RRF đủ |", "|---|---|---|"]
-        for r in lo:
-            L.append(f"| {r['removed']} | {fmt(*r['jaccard_vs_full'])} | {fmt(*r['rbo_vs_full'])} |")
-        sens = rrf_k_sensitivity(br, names, a.depth, kc)
-        L += ["", f"Độ ổn định theo hằng số k của RRF (tỷ lệ top-{kc} giữ nguyên so với k=60): " +
-              ", ".join(f"k={kk}: {v:.0%}" for kk, v in sens.items())]
-        for rr in [x for x in a.reranked.split(",") if x]:
-            p = rdir / f"{rr}.parquet"
-            if p.exists():
-                after = runs.topk_lists(runs.read(p, depth=kmax), kmax, "unit")
-                (j, jl, jh), (t, tl, th) = rerank_change(fl, after, kc)
-                L += ["", f"Xếp hạng lại {rr} so với {fused_name}, top-{kc}: Jaccard {fmt(j, jl, jh)}, "
-                      f"Kendall τ trên đoạn chung {fmt(t, tl, th)}"]
-    L += ["", "## Đọc kết quả thế nào", "",
-          "- Hai nhánh trùng nhiều (overlap > 0,7) → gần như thừa nhau về TẬP kết quả; giữ cả hai chỉ có lợi nếu thứ hạng "
-          "của chúng bổ sung nhau (xem mục 5) và tập có nhãn xác nhận.",
-          "- Nhánh thêm nhiều tài liệu mới / có nhiều tài liệu riêng → ứng viên để kiểm tra trên tập có nhãn: có thể là "
-          "Recall bổ sung (vd nhánh zh mở ra tài liệu tiếng Trung) hoặc chỉ là nhiễu.",
-          "- Nhánh ảnh hưởng mạnh tới RRF (mục 5) mà tập có nhãn cho thấy độ chính xác thấp → giảm trọng số hoặc bỏ.",
-          "- Các quyết định giữ/bỏ chỉ dựa trên `mirret.evaluate` (tập có nhãn) — xem docs/EVAL_PLAN.md."]
-    md = "\n".join(L) + "\n"
-    (out / "diag.md").write_text(md, encoding="utf-8")
-    print(md)
+    skip = [x for x in a.skip.split(",") if x]
+    resume = [x for x in a.resume.split(",") if x]
+    if a.cmd == "plan":
+        _, _, total, fp = plan(cfg.path("chunks") / a.level, encoded_pairs(skip, a.level) if skip else None)
+        print(json.dumps({"level": a.level, "units": total, "fp": fp,
+                          "blocks": -(-total // cfg["encode"]["block"])}, indent=1))
+        return
+    ec = cfg["encode"]
+    enc = M3Encoder.load(ec["model"], resolve_device(a.device), ec["fp16"], ec["max_length"])
+    if a.cmd == "bench":
+        bench(enc, cfg, a.level, a.n)
+    else:
+        run(enc, cfg, a.level, a.shard, skip, resume)
 
 
 if __name__ == "__main__":

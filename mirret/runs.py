@@ -83,6 +83,21 @@ def read(path, depth=None, qids=None):
     return ds.dataset(str(path)).to_table(filter=f).to_pandas()
 
 
+def read_qids(spec):
+    """Tập qid từ --qids: "1,2,3" hoặc file .txt (mỗi dòng một qid) / .csv / .parquet (cột qid hoặc id, vd
+    eval/judge/queries.csv của bộ nhãn). Rỗng → None (mọi câu hỏi)."""
+    if not spec:
+        return None
+    p = Path(spec)
+    if not p.exists():
+        return {int(x) for x in str(spec).split(",") if x.strip()}
+    if p.suffix in (".csv", ".parquet"):
+        df = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p, encoding="utf-8-sig")
+        col = "qid" if "qid" in df.columns else "id"
+        return {int(x) for x in df[col]}
+    return {int(x) for x in p.read_text(encoding="utf-8-sig").split() if x.strip()}
+
+
 def doc_ranking(df):
     """Run đoạn → thứ hạng tài liệu (điểm tài liệu = đoạn tốt nhất). Thêm cột drank."""
     d = df.sort_values(["qid", "rank"]).drop_duplicates(["qid", "doc_id"], keep="first").copy()
