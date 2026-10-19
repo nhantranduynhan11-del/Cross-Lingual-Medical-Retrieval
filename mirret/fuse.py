@@ -53,6 +53,9 @@ def main():
         configs = {a.name or "fused": a.runs.split(",")}
     else:
         configs = {n: v for n, v in fc["configs"].items() if not a.only or n in a.only.split(",")}
+        unknown = [n for n in (a.only or "").split(",") if n and n not in fc["configs"]]
+        if unknown:                                           # vd mir2-code cũ chưa có rrf9_w trong retrieval.yaml
+            raise SystemExit(f"fuse.configs không có {unknown} (có: {list(fc['configs'])}) — kiểm tra bản mir2-code")
     for name, items in configs.items():
         items = [parse_item(x) for x in items]
         have = load_runs(rdir, [r for r, _ in items], fc["depth"])
