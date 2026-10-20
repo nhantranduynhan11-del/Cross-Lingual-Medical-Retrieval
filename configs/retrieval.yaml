@@ -90,6 +90,8 @@ rerank:
   method: cross                          # BASELINE: cross (bge-reranker-v2-m3; hơn rrf9 có ý nghĩa, cùng dấu 2 nửa) | colbert
                                          # (multi-vector BGE-M3; không hơn rrf9 trên tập có nhãn)
   cross_model: "BAAI/bge-reranker-v2-m3"
+  qwen3_model: "Qwen/Qwen3-Reranker-4B"  # method qwen3 (instruction mặc định của model) | qwen3i (instruction y khoa)
+  qwen3_batch_tokens: 8192               # 4B trên T4 fp16: nhỏ hơn bge để vừa bộ nhớ
   top_n: 400                             # F2 tính theo TẬP → xếp hạng lại chỉ có ích khi top_n > k_chunk
   match_lang: true                       # đoạn zh chấm bằng câu hỏi zh, đoạn en bằng câu en (thiếu bản dịch → câu vi)
   query_max_length: 256
