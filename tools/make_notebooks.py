@@ -415,9 +415,11 @@ in ở ô (6).
     code('''
 # (2) Đầu vào: danh sách câu; câu hỏi 3 ngôn ngữ GIỐNG baseline; bản ghi dịch (concepts); đoạn giả phiên trước; 9 nhánh
 if QIDS and not os.path.exists(QIDS) and not QIDS.replace(',', '').isdigit():
-    hits = sorted(glob.glob(f'{KAGGLE}/input/**/{QIDS}', recursive=True), key=len)
+    nrow = lambda h: sum(1 for _ in open(h, encoding='utf-8-sig')) - 1
+    hits = sorted(glob.glob(f'{KAGGLE}/input/**/{QIDS}', recursive=True), key=lambda h: (-nrow(h), len(h)))
     assert hits, f'Không thấy {QIDS} trong /kaggle/input'
-    QIDS = hits[0]
+    print('các file', QIDS, 'trong input:', [(h, nrow(h)) for h in hits])
+    QIDS = hits[0]                                    # bộ nhãn chỉ tăng → lấy bản nhiều câu nhất (vd 80, không phải 40)
 QARG = f' --qids "{QIDS}"' if QIDS else ''
 print('câu hỏi:', QIDS or 'cả 1.200 câu')
 base = (locate_all('runs/vi_dense.parquet') or [None])[0]
