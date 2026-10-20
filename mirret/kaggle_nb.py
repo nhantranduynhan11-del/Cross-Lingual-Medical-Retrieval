@@ -78,7 +78,8 @@ def setup(nb_version, overrides=None, pip="pyvi jieba faiss-cpu", inputs=("chunk
     data = locate("data/query.parquet")
     print("mir2-data", data)
     os.environ.update(MIR_DATA_DIR=str(data), MIR_WORK_DIR=str(WORK), PYTHONIOENCODING="utf-8",
-                      HF_HUB_DISABLE_SYMLINKS_WARNING="1", TOKENIZERS_PARALLELISM="false")
+                      HF_HUB_DISABLE_SYMLINKS_WARNING="1", TOKENIZERS_PARALLELISM="false",
+                      PYTHONPATH=f"{code}:{os.environ.get('PYTHONPATH', '')}")
     ov = {}
     keys = {"chunks": ("chunk.out_dir", "chunks/parents"), "index": ("index.out_dir", "index"),
             "qtrans": ("translate.out_dir", "qtrans/queries_vi.parquet"), "runs": ("retrieve.out_dir", "runs")}
@@ -104,8 +105,10 @@ def sh(cmd, step=None, check=True):
     cmd = _py(cmd)
     print("$", cmd, flush=True)
     t0 = time.time()
+    code_dir = WORK / "code"
+    run_cwd = str(code_dir) if code_dir.exists() else None
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8",
-                         errors="replace")
+                         errors="replace", cwd=run_cwd)
     for line in p.stdout:
         print(line, end="", flush=True)
     code = p.wait()
@@ -131,8 +134,10 @@ def par(cmds, step):
         env = dict(os.environ, **dict(kv.split("=", 1) for kv in m.group(1).split()))
         c = _py(m.group(2))
         print("$", m.group(1) + c, ">", lg, flush=True)
+        code_dir = WORK / "code"
+        run_cwd = str(code_dir) if code_dir.exists() else None
         with open(lg, "w", encoding="utf-8") as fh:
-            ps.append(subprocess.Popen(c, shell=True, env=env, stdout=fh, stderr=subprocess.STDOUT))
+            ps.append(subprocess.Popen(c, shell=True, env=env, stdout=fh, stderr=subprocess.STDOUT, cwd=run_cwd))
     codes = [p.wait() for p in ps]
     T[step] = T.get(step, 0) + time.time() - t0
     for i, lg in enumerate(logs):
