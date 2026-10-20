@@ -404,6 +404,8 @@ nhánh LSR + BM25), `bm25c9_cross_sub`. Mẫu đoạn giả: `qexp/<biến thể
 in ở ô (6).
 **Thời gian:** ô (3) in s/lượt — 40 câu × 3 ngôn ngữ × 2 chế độ ước ~20–40 phút; chỉ mục dense như k4; rerank 4 run × 40 câu
 ~10 phút. Muốn chạy 1.200 câu: nhân thời gian sinh đo được lên 30 trước khi quyết định.
+**Chạy đủ 1.200 câu (1 phiên):** `QIDS = ''`, `MODES = ['q2d']`, `FUSED = ['q2d9']`, `BATCH = 16` → thêm
+`runs/q2d9_cross.parquet` + `submissions/q2d9_cross.zip`. Ước tính 6,5–10 giờ (sinh ~3 giờ, chỉ mục dense 1–4,5 giờ).
 **Đầu ra:** `qexp/`, `runs/` (nhánh biến thể, run gộp, `*_cross_sub`) → dataset **`mir2-qexp`**.
 """),
     setup_cell("k7-v1", "MODES = ['q2d', 'hyde']\nMODEL = 'qwen25_14b'\n"
@@ -499,6 +501,11 @@ for f in FUSED:
          f'--top-n {TOP_N} --shard {g}/2 --device cuda:0{QARG}' for g in range(2)], f'rerank_{f}')
     sh(f'python -m mirret.rerank --config {K.cfg} --run {RUNS}/{f}.parquet --method cross --top-n {TOP_N} '
        f'--shard 0/2{QARG}')
+if not QIDS:                                          # chạy đủ 1.200 câu → bài nộp cho từng run đã rerank
+    K.set({'retrieve.out_dir': RUNS})
+    for f in FUSED:
+        if os.path.exists(f'{RUNS}/{f}_cross.parquet'):
+            sh(f'python -m mirret.submit --config {K.cfg} --run {RUNS}/{f}_cross.parquet', f'submit_{f}')
 for f in copied:
     os.remove(f)
 if not SAVE_INDEX:
