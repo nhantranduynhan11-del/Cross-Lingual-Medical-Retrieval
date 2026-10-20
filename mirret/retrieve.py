@@ -9,6 +9,8 @@ Dense: FAISS index/dense_<mức>.faiss; LSR: đọc thẳng sparse.npz của cá
 
   python -m mirret.retrieve qencode --device cuda:0 [--langs vi,en,zh]     # → qemb/<lang>.npz
   python -m mirret.retrieve run [--langs vi,en,zh] [--methods dense,lsr,bm25] [--emb a,b]
+Biến thể câu hỏi (mirret/expand.py, vd Query2Doc / HyDE): --variant q2d → câu hỏi ở qexp/q2d/queries_<lang>.parquet
+(BM25 dùng queries_<lang>_bm25.parquet nếu có), qemb/q2d_<lang>.npz, runs/q2d_<lang>_<method>[@mức].parquet.
 """
 import argparse
 import time
@@ -20,8 +22,21 @@ from . import bm25, config, fuse, runs, sparse_index
 from .encode import done_blocks, load_qemb
 
 
-def queries_path(cfg, lang):
-    return cfg.path("qtrans") / f"queries_{lang}.parquet"
+def queries_path(cfg, lang, variant=None, bm25=False):
+    if not variant:
+        return cfg.path("qtrans") / f"queries_{lang}.parquet"
+    d = cfg.path("qexp") / variant
+    if bm25 and (d / f"queries_{lang}_bm25.parquet").exists():
+        return d / f"queries_{lang}_bm25.parquet"
+    return d / f"queries_{lang}.parquet"
+
+
+def prefix(variant):
+    return f"{variant}_" if variant else ""
+
+
+def qemb_path(cfg, lang, variant=None):
+    return cfg.path("qemb") / f"{prefix(variant)}{lang}.npz"
 
 
 def load_queries(path):
@@ -29,17 +44,17 @@ def load_queries(path):
     return [int(x) for x in t["id"]], list(t["query"])
 
 
-def qencode(cfg, langs, device, log=print):
+def qencode(cfg, langs, device, variant=None, log=print):
     from .encode import M3Encoder, encode_texts, resolve_device
     ec = cfg["encode"]
     enc = M3Encoder.load(ec["model"], resolve_device(device), ec["fp16"], ec["max_length"])
     for lg in langs:
-        p = queries_path(cfg, lg)
+        p = queries_path(cfg, lg, variant)
         if not p.exists():
             log(f"  [{lg}] chưa có {p} → bỏ qua")
             continue
         qids, texts = load_queries(p)
-        out = encode_texts(enc, qids, texts, cfg.path("qemb") / f"{lg}.npz", ec["batch_tokens"])
+        out = encode_texts(enc, qids, texts, qemb_path(cfg, lg, variant), ec["batch_tokens"])
         log(f"  [{lg}] {len(qids)} câu → {out}")
 
 
@@ -47,12 +62,12 @@ def _depth_for(level, depth):
     return depth * 3 if level == "children" else depth   # nhiều đoạn con cùng một đoạn cha → lấy sâu hơn
 
 
-def run_level(cfg, lang, method, level, depth, emb=None, allowed=None, log=print):
+def run_level(cfg, lang, method, level, depth, emb=None, allowed=None, variant=None, log=print):
     """→ run mức đoạn cha (đã dồn đoạn con về đoạn cha), hoặc None nếu thiếu dữ liệu."""
     rc = cfg["retrieve"]
     d = _depth_for(level, depth)
     if method in ("dense", "lsr"):
-        qp = cfg.path("qemb") / f"{lang}.npz"
+        qp = qemb_path(cfg, lang, variant)
         if not qp.exists():
             log(f"    thiếu {qp}")
             return None
@@ -72,7 +87,7 @@ def run_level(cfg, lang, method, level, depth, emb=None, allowed=None, log=print
     else:
         from .index import bm25_dir
         bd = bm25_dir(cfg, level, lang)
-        qp = queries_path(cfg, lang)
+        qp = queries_path(cfg, lang, variant, bm25=True)
         if not (bd / "vocab.parquet").exists() or not qp.exists():
             log(f"    thiếu chỉ mục {bd} hoặc {qp}")
             return None
@@ -85,7 +100,7 @@ def run_level(cfg, lang, method, level, depth, emb=None, allowed=None, log=print
     return df[df["rank"] <= depth].reset_index(drop=True)
 
 
-def run_all(cfg, langs, methods, emb=None, log=print):
+def run_all(cfg, langs, methods, emb=None, variant=None, log=print):
     rc, rdir = cfg["retrieve"], cfg.path("runs")
     depth = rc["depth"]
     allowed = {}                                           # LSR: chỉ vector khớp bản chunks hiện tại
@@ -94,6 +109,7 @@ def run_all(cfg, langs, methods, emb=None, log=print):
         for lang in langs:
             t0 = time.time()
             level_runs = {}
+            name = f"{prefix(variant)}{lang}_{method}"
             for level in levels:
                 al = None
                 if method == "lsr":
@@ -101,23 +117,23 @@ def run_all(cfg, langs, methods, emb=None, log=print):
                         from .index import current_pairs
                         allowed[level] = {f"{u}:{h}" for u, h in current_pairs(cfg.path("chunks") / level).items()}
                     al = allowed[level]
-                df = run_level(cfg, lang, method, level, depth, emb, al, log)
+                df = run_level(cfg, lang, method, level, depth, emb, al, variant, log)
                 if df is None:
                     continue
                 level_runs[level] = df
-                runs.write(df, rdir / f"{lang}_{method}@{level}.parquet",
-                           {"lang": lang, "method": method, "level": level, "depth": depth})
+                runs.write(df, rdir / f"{name}@{level}.parquet",
+                           {"lang": lang, "method": method, "level": level, "depth": depth, "variant": variant})
             if not level_runs:
-                log(f"  {lang}_{method}: KHÔNG có mức nào chạy được")
+                log(f"  {name}: KHÔNG có mức nào chạy được")
                 continue
             if len(level_runs) == 1:
                 br = next(iter(level_runs.values()))
             else:
                 br = fuse.rrf(list(level_runs.values()), cfg["fuse"]["rrf_k"], depth)
-            runs.write(br, rdir / f"{lang}_{method}.parquet",
+            runs.write(br, rdir / f"{name}.parquet",
                        {"lang": lang, "method": method, "levels": list(level_runs), "depth": depth,
-                        "level_fusion": "rrf" if len(level_runs) > 1 else None})
-            log(f"  {lang}_{method}: {br['qid'].nunique()} câu hỏi, mức {list(level_runs)}, {time.time() - t0:.0f}s")
+                        "level_fusion": "rrf" if len(level_runs) > 1 else None, "variant": variant})
+            log(f"  {name}: {br['qid'].nunique()} câu hỏi, mức {list(level_runs)}, {time.time() - t0:.0f}s")
 
 
 def main():
@@ -129,16 +145,17 @@ def main():
     ap.add_argument("--methods", default=None)
     ap.add_argument("--emb", default=None, help="thư mục emb cho LSR (phẩy ngăn cách); mặc định <work>/emb")
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--variant", default=None, help="biến thể câu hỏi trong qexp/ (mirret.expand build), vd q2d, hyde")
     a = ap.parse_args()
     cfg = config.load(a.config)
     rc = cfg["retrieve"]
     langs = a.langs.split(",") if a.langs else rc["langs"]
     if a.cmd == "qencode":
-        qencode(cfg, langs, a.device)
+        qencode(cfg, langs, a.device, a.variant)
     else:
         methods = a.methods.split(",") if a.methods else rc["methods"]
         emb = [Path(x) for x in a.emb.split(",")] if a.emb else None
-        run_all(cfg, langs, methods, emb)
+        run_all(cfg, langs, methods, emb, a.variant)
 
 
 if __name__ == "__main__":

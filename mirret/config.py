@@ -13,7 +13,7 @@ DEFAULT = ROOT / "configs" / "retrieval.yaml"
 
 _WORK = {"chunks": ("chunk", "out_dir"), "emb": ("encode", "out_dir"), "index": ("index", "out_dir"),
          "qtrans": ("translate", "out_dir"), "runs": ("retrieve", "out_dir"), "submissions": ("submit", "out_dir"),
-         "eval": ("eval", "out_dir")}
+         "eval": ("eval", "out_dir"), "qexp": ("expand", "out_dir")}
 _FIXED = ("qemb", "results")
 
 
@@ -25,7 +25,7 @@ class Cfg(dict):
             raise AttributeError(k) from None
 
     def path(self, name, override=None):
-        """corpus | queries | links (dưới data_dir) hoặc chunks | emb | index | qtrans | qemb | runs | eval |
+        """corpus | queries | links (dưới data_dir) hoặc chunks | emb | index | qtrans | qexp | qemb | runs | eval |
         submissions | results (dưới work_dir). override (giá trị dòng lệnh) được ưu tiên."""
         if override:
             return Path(override)

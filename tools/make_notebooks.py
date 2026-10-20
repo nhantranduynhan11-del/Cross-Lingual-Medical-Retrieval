@@ -357,3 +357,128 @@ shutil.rmtree(OUT)                                     # run đã có trong data
 report('k6')
 '''),
 ])
+
+# ---------------------------------------------------------------- k7: tài liệu giả (Query2Doc / HyDE) + truy xuất + rerank
+save("k7_qexp.ipynb", [
+    md("""
+# k7 — Mở rộng câu hỏi bằng tài liệu giả: Query2Doc vs HyDE (task B1 + B2)
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
+**Add Input:** `mir2-code`, `mir2-data`, `mir2-chunks`, `mir2-qtrans` (concepts của bản dịch t2, cho `bm25c`),
+`mir2-runs` (output k4: 9 nhánh baseline + `qtrans/queries_*`), mọi `mir2-emb-m*`, dataset chứa `queries.csv`
+(danh sách câu có nhãn); thêm output k7 phiên trước nếu chạy tiếp (chỉ sinh phần đoạn giả còn thiếu).
+
+**Thiết kế (R2MED 2025, phụ lục E):** mỗi câu hỏi × ngôn ngữ một đoạn giả ~100–150 từ do Qwen2.5-14B (4-bit) viết thẳng
+bằng ngôn ngữ của nhánh, sinh tất định.
+- `q2d` (Query2Doc): prompt 2 ví dụ; truy hồi bằng câu hỏi + đoạn giả (BM25: câu hỏi lặp 3 lần + đoạn giả).
+- `hyde` (HyDE): prompt không ví dụ; truy hồi bằng riêng đoạn giả.
+- `bm25c`: câu hỏi + concepts của bản dịch, chỉ nhánh BM25 (không cần LLM).
+Reranker (bge-reranker-v2-m3) luôn dùng câu hỏi gốc / bản dịch.
+
+**Run gửi chấm** (so với `rrf9_w_cross`): `q2d9_cross_sub`, `hyde9_cross_sub`, `q2dlex_cross_sub` (đoạn giả chỉ ở 6
+nhánh LSR + BM25), `bm25c9_cross_sub`. Mẫu đoạn giả: `qexp/<biến thể>/samples.md`; độ trùng top-100 với nhánh baseline
+in ở ô (6).
+**Thời gian:** ô (3) in s/lượt — 40 câu × 3 ngôn ngữ × 2 chế độ ước ~20–40 phút; chỉ mục dense như k4; rerank 4 run × 40 câu
+~10 phút. Muốn chạy 1.200 câu: nhân thời gian sinh đo được lên 30 trước khi quyết định.
+**Đầu ra:** `qexp/`, `runs/` (nhánh biến thể, run gộp, `*_cross_sub`) → dataset **`mir2-qexp`**.
+"""),
+    setup_cell("k7-v1", "MODES = ['q2d', 'hyde']\nMODEL = 'qwen25_14b'\n"
+                        "QIDS = 'queries.csv'                 # '' = cả 1.200 câu\n"
+                        "LIMIT = 0                            # >0: chỉ N câu đầu (đọc thử đoạn giả)\n"
+                        "BATCH, QUANT = 8, '4bit'\n"
+                        "FUSED = ['q2d9', 'hyde9', 'q2dlex', 'bm25c9']   # fuse.configs trong retrieval.yaml\n"
+                        "TOP_N = 400\nSAVE_INDEX = False", "('chunks',)"),
+    code('''
+# (2) Đầu vào: danh sách câu; câu hỏi 3 ngôn ngữ GIỐNG baseline; bản ghi dịch (concepts); đoạn giả phiên trước; 9 nhánh
+if QIDS and not os.path.exists(QIDS) and not QIDS.replace(',', '').isdigit():
+    hits = sorted(glob.glob(f'{KAGGLE}/input/**/{QIDS}', recursive=True), key=len)
+    assert hits, f'Không thấy {QIDS} trong /kaggle/input'
+    QIDS = hits[0]
+QARG = f' --qids "{QIDS}"' if QIDS else ''
+print('câu hỏi:', QIDS or 'cả 1.200 câu')
+base = (locate_all('runs/vi_dense.parquet') or [None])[0]
+assert base is not None, 'Add Input mir2-runs (output k4)'
+QT, RUNS = f'{K.work}/qtrans', f'{K.work}/runs'
+os.makedirs(QT, exist_ok=True); os.makedirs(RUNS, exist_ok=True)
+for f in glob.glob(f'{base}/qtrans/queries_*'):
+    shutil.copy(f, QT)
+for d in locate_all('qtrans'):
+    for f in glob.glob(f'{d}/qtrans/*/records*.jsonl'):
+        dst = f'{QT}/' + os.path.relpath(f, f'{d}/qtrans')
+        os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy(f, dst)
+for d in locate_all('qexp'):
+    for f in glob.glob(f'{d}/qexp/*/records*.jsonl'):
+        dst = f'{K.work}/qexp/' + os.path.relpath(f, f'{d}/qexp')
+        if not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy(f, dst); print('chép', f)
+copied = []
+for f in glob.glob(f'{base}/runs/*.parquet'):
+    if '@' not in os.path.basename(f):
+        shutil.copy(f, RUNS); copied.append(f'{RUNS}/' + os.path.basename(f))
+K.set({'translate.out_dir': QT, 'retrieve.out_dir': RUNS})
+bm = locate('index/bm25', required=False)
+if bm is not None:
+    K.set({'bm25.index_dir': str(bm / 'index' / 'bm25')})
+EMB = ','.join(sorted({str(d / 'emb') for d in locate_all('emb')}))
+print('emb:', EMB)
+sh('python -m pip install -q -U bitsandbytes accelerate')
+'''),
+    code('''
+# (3) Sinh đoạn giả: mỗi chế độ 2 GPU song song (mỗi GPU một bản 4-bit, mỗi bản một nửa số câu)
+lim = f' --limit {LIMIT}' if LIMIT else ''
+for m in MODES:
+    par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.expand generate --config {K.cfg} --mode {m} --model {MODEL} '
+         f'--shard {g}/2 --batch {BATCH} --quant {QUANT}{QARG}{lim}' for g in range(2)], f'expand_{m}')
+'''),
+    code('''
+# (4) Dựng câu hỏi cho từng biến thể + đọc mẫu đoạn giả
+for m in MODES + ['bm25c']:
+    sh(f'python -m mirret.expand build --config {K.cfg} --mode {m} --model {MODEL}')
+for m in MODES:
+    print(open(f'{K.work}/qexp/{m}/samples.md', encoding='utf-8').read()[:3000])
+'''),
+    code('''
+# (5) Chỉ mục dense (như k4) + mã hoá câu hỏi các biến thể (GPU)
+for lv in ('parents', 'children'):
+    sh(f'python -m mirret.index dense --config {K.cfg} --level {lv} --emb {EMB}', f'dense_{lv}')
+for m in MODES:
+    sh(f'python -m mirret.retrieve qencode --config {K.cfg} --device cuda:0 --variant {m}', f'qencode_{m}')
+'''),
+    code('''
+# (6) 9 nhánh cho mỗi biến thể (bm25c: chỉ BM25) → gộp; độ trùng top-100 với nhánh baseline (không cần nhãn)
+for m in MODES:
+    sh(f'python -m mirret.retrieve run --config {K.cfg} --emb {EMB} --variant {m}', f'retrieve_{m}')
+sh(f'python -m mirret.retrieve run --config {K.cfg} --methods bm25 --variant bm25c', 'retrieve_bm25c')
+sh(f'python -m mirret.fuse --config {K.cfg} --only {",".join(FUSED)}', 'fuse')
+import pandas as pd
+from mirret import runs as R
+rows = []
+for m in MODES + ['bm25c']:
+    for b in [f'{lg}_{me}' for lg in ('vi', 'en', 'zh') for me in ('dense', 'lsr', 'bm25')]:
+        p, q = f'{RUNS}/{m}_{b}.parquet', f'{RUNS}/{b}.parquet'
+        if os.path.exists(p) and os.path.exists(q):
+            a = R.topk_sets(R.read(p, 100), 100, 'unit')
+            c = R.topk_sets(R.read(q, 100, qids=set(a)), 100, 'unit')
+            rows.append({'biến thể': m, 'nhánh': b,
+                         'trùng@100': round(sum(len(a[x] & c.get(x, set())) for x in a) / (100 * len(a)), 3)})
+print('Tỷ lệ đoạn top-100 trùng với nhánh baseline (thấp = biến thể đưa nhiều tài liệu mới vào):')
+print(pd.DataFrame(rows).pivot(index='nhánh', columns='biến thể', values='trùng@100'))
+'''),
+    code('''
+# (7) Rerank bge-reranker-v2-m3 top-400 (câu hỏi gốc) → run gửi chấm; bỏ bản sao 9 nhánh baseline khỏi output
+for f in FUSED:
+    if not os.path.exists(f'{RUNS}/{f}.parquet'):
+        print('bỏ qua', f, '(chưa gộp được)'); continue
+    par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.rerank --config {K.cfg} --run {RUNS}/{f}.parquet --method cross '
+         f'--top-n {TOP_N} --shard {g}/2 --device cuda:0{QARG}' for g in range(2)], f'rerank_{f}')
+    sh(f'python -m mirret.rerank --config {K.cfg} --run {RUNS}/{f}.parquet --method cross --top-n {TOP_N} '
+       f'--shard 0/2{QARG}')
+for f in copied:
+    os.remove(f)
+if not SAVE_INDEX:
+    for f in glob.glob(f'{K.work}/index/dense_*'):
+        os.remove(f)
+print('run gửi chấm:', sorted(os.path.basename(f) for f in glob.glob(f'{RUNS}/*_cross*.parquet')))
+report('k7')
+'''),
+])

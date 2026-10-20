@@ -77,6 +77,7 @@ dữ liệu: thêm `--dir-mode zip`. Với output notebook: tab *Output* → *Ne
 | `k4_index_retrieve` | GPU T4 | code, data, chunks, qtrans, mọi emb | `USE` = bản dịch; chỉ mục FAISS, mã hoá câu hỏi, 9 nhánh, RRF, chẩn đoán |
 | `k5_rerank_submit` | GPU T4 ×2 | code, data, chunks, runs | rerank `METHODS` top-`TOP_N`, bài nộp cho run gộp và từng run rerank |
 | `k6_eval` | CPU | code, data, chunks, runs, rerank (+ labels) | `MODE='pool'` → phiếu; `'extend'` → phiếu bổ sung; `'score'` → kappa, điểm, giá trị biên, bảng |
+| `k7_qexp` | GPU T4 ×2 | code, data, chunks, qtrans, runs, mọi emb, `queries.csv` | tài liệu giả Query2Doc / HyDE (Qwen2.5-14B) + bm25c → 9 nhánh biến thể → `q2d9`, `hyde9`, `q2dlex`, `bm25c9` → rerank trên bộ nhãn |
 
 Ô (1) của mọi notebook in `VERSION.txt` của `mir2-code` — kiểm tra đúng bản trước khi chạy dài.
 Mỗi notebook ghi thời gian từng bước và dung lượng output vào `results/timing_<tên>.json`.
@@ -144,6 +145,8 @@ python -m mirret.submit --run runs/rrf9_w_cross.parquet --verify-corpus
 - **Thử trên bộ nhãn trước, chạy đủ 1.200 câu sau:** danh sách câu có nhãn `queries.csv` (gửi qua Drive; nhãn do người
   phụ trách nhãn giữ). `mirret.rerank --qids queries.csv` hoặc notebook k5 `QIDS = 'queries.csv'` → `<run>_<method>_sub`.
   Module mới đọc danh sách câu bằng `runs.read_qids`.
+- **Task B1/B2 (Query2Doc vs HyDE):** `mirret/expand.py` + notebook k7; biến thể câu hỏi chạy bằng
+  `retrieve --variant <tên>` → `runs/<tên>_<lang>_<method>.parquet`; run gửi chấm `*_cross_sub`.
 - **Bàn giao vòng chấm:** gửi `runs/<tên>.parquet` + `.json` cho người phụ trách nhãn trước tối 22/10 (vòng 1) và 26/10
   (vòng 2); so với baseline bằng `tools/eval_split.py` trên thư mục eval nhận lại.
 - **Code lên Kaggle:** mỗi người đóng gói nhánh của mình: `python tools/pack_kaggle_ret.py code --user <tên Kaggle>`;

@@ -67,6 +67,13 @@ translate:                               # dịch câu hỏi vi → en → zh b�
   max_new_tokens: 512
   out_dir: "qtrans"                      # qtrans/<tên>/records*.jsonl; qtrans/queries_{vi,en,zh}.parquet
 
+expand:                                  # tài liệu giả do LLM sinh (mirret/expand.py): q2d = Query2Doc, hyde = HyDE
+  model: qwen25_14b                      # tên trong translate.models; lượng tử theo translate.quant
+  max_new_tokens: 320                    # đoạn ~100–150 từ (zh ~150–200 chữ)
+  batch: 8
+  bm25_repeat: 3                         # q2d với BM25: câu hỏi lặp n lần + đoạn giả (Query2doc dùng 5 với câu hỏi ngắn)
+  out_dir: "qexp"                        # qexp/<mode>-<model>/records*.jsonl ; qexp/<biến thể>/queries_*.parquet
+
 retrieve:
   langs: [vi, en, zh]                    # nhánh ngôn ngữ câu hỏi (vi = câu gốc)
   methods: [dense, lsr, bm25]            # 3 × 3 = 9 nhánh
@@ -85,6 +92,11 @@ fuse:
     rrf9_w: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25]
     rrf_vi: [vi_dense, vi_lsr, vi_bm25]
     rrf_dense3: [vi_dense, en_dense, zh_dense]
+    # Thử nghiệm B1/B2 (20/10): tài liệu giả do LLM sinh, cùng trọng số với rrf9_w (mirret/expand.py)
+    q2d9: [q2d_vi_dense, q2d_vi_lsr, q2d_vi_bm25, q2d_en_dense, "q2d_en_lsr*0.5", "q2d_en_bm25*0.5", q2d_zh_dense, q2d_zh_lsr, q2d_zh_bm25]
+    hyde9: [hyde_vi_dense, hyde_vi_lsr, hyde_vi_bm25, hyde_en_dense, "hyde_en_lsr*0.5", "hyde_en_bm25*0.5", hyde_zh_dense, hyde_zh_lsr, hyde_zh_bm25]
+    q2dlex: [vi_dense, q2d_vi_lsr, q2d_vi_bm25, en_dense, "q2d_en_lsr*0.5", "q2d_en_bm25*0.5", zh_dense, q2d_zh_lsr, q2d_zh_bm25]
+    bm25c9: [vi_dense, vi_lsr, bm25c_vi_bm25, en_dense, "en_lsr*0.5", "bm25c_en_bm25*0.5", zh_dense, zh_lsr, bm25c_zh_bm25]
 
 rerank:
   method: cross                          # BASELINE: cross (bge-reranker-v2-m3; hơn rrf9 có ý nghĩa, cùng dấu 2 nửa) | colbert

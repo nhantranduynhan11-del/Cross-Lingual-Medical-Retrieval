@@ -331,11 +331,35 @@ def vi_queries(cfg):
 
 
 # ---------------------------------------------------------------- sinh (GPU)
+def load_llm(mid, quant=None, log=print):
+    """Tokenizer (đệm trái) + model sinh; quant '4bit' | '8bit' (bitsandbytes, chỉ khi có GPU) | None (fp16)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(mid, padding_side="left")
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    dtype = torch.float16 if torch.cuda.is_available() else torch.bfloat16
+    kw = {}
+    if quant in ("4bit", "8bit") and torch.cuda.is_available():
+        from transformers import BitsAndBytesConfig
+        kw["quantization_config"] = (BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=dtype,
+                                                        bnb_4bit_quant_type="nf4")
+                                     if quant == "4bit" else BitsAndBytesConfig(load_in_8bit=True))
+    if torch.cuda.is_available():
+        kw["device_map"] = "auto"
+        kw["max_memory"] = {i: int(torch.cuda.get_device_properties(i).total_memory * 0.8)
+                            for i in range(torch.cuda.device_count())}
+    from transformers.utils import logging as hf_logging
+    hf_logging.disable_progress_bar()                    # bỏ thanh "Loading weights" (làm rác log)
+    model = AutoModelForCausalLM.from_pretrained(mid, torch_dtype=dtype, **kw).eval()
+    log(f"  nạp xong {mid}: lượng tử {quant if 'quantization_config' in kw else 'không (fp16/CPU)'}")
+    return tok, model
+
+
 def generate(cfg, key, shard="0/1", limit=0, batch=None, quant=None, prompt=None, log=print):
     import os
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
     tc = dict(cfg["translate"])
     if quant:
         tc["quant"] = quant
@@ -357,25 +381,8 @@ def generate(cfg, key, shard="0/1", limit=0, batch=None, quant=None, prompt=None
     log(f"[{key}] {mid}: phần {shard}: {len(qids)} câu, đã có {len(qids) - len(todo)}, còn {len(todo)}")
     if not todo:
         return
-    tok = AutoTokenizer.from_pretrained(mid, padding_side="left")
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
-    dtype = torch.float16 if torch.cuda.is_available() else torch.bfloat16
-    kw = {}
-    if tc.get("quant") in ("4bit", "8bit") and torch.cuda.is_available():
-        from transformers import BitsAndBytesConfig
-        kw["quantization_config"] = (BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=dtype,
-                                                        bnb_4bit_quant_type="nf4")
-                                     if tc["quant"] == "4bit" else BitsAndBytesConfig(load_in_8bit=True))
-    if torch.cuda.is_available():
-        kw["device_map"] = "auto"
-        kw["max_memory"] = {i: int(torch.cuda.get_device_properties(i).total_memory * 0.8)
-                            for i in range(torch.cuda.device_count())}
-    from transformers.utils import logging as hf_logging
-    hf_logging.disable_progress_bar()                    # bỏ thanh "Loading weights" (làm rác log)
-    model = AutoModelForCausalLM.from_pretrained(mid, torch_dtype=dtype, **kw).eval()
-    log(f"  nạp xong: lượng tử {tc['quant'] if 'quantization_config' in kw else 'không (fp16/CPU)'}, "
-        f"lô {batch or tc['batch']}")
+    tok, model = load_llm(mid, tc.get("quant"), log)
+    log(f"  lô {batch or tc['batch']}")
 
     def chat(q):
         msgs = [{"role": "system", "content": system}]

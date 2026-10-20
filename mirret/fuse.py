@@ -65,7 +65,16 @@ def main():
             if a.only or a.runs:                              # gộp theo yêu cầu cụ thể mà thiếu run → báo lỗi
                 raise SystemExit(f"thiếu run {miss} trong {rdir}")
             continue
-        df = rrf([have[r] for r, _ in items], fc["rrf_k"], fc["depth"], [w for _, w in items])
+        lst = [have[r] for r, _ in items]
+        # trộn nhánh biến thể chạy trên bộ nhãn (vd 40 câu) với nhánh baseline (1.200 câu) → chỉ gộp các câu của nhánh
+        # nhỏ; run phủ gần đủ (vd thiếu vài câu dịch) không bị lọc như trước
+        sizes = [x["qid"].nunique() for x in lst]
+        small = [set(x["qid"].unique()) for x, n in zip(lst, sizes) if n * 2 < max(sizes)]
+        if small:
+            keep = set.intersection(*small)
+            print(f"  {name}: chỉ gộp {len(keep)} câu hỏi của các nhánh chạy trên tập con")
+            lst = [x[x["qid"].isin(keep)] for x in lst]
+        df = rrf(lst, fc["rrf_k"], fc["depth"], [w for _, w in items])
         runs.write(df, rdir / f"{name}.parquet", {"fusion": "rrf", "k": fc["rrf_k"], "runs": [r for r, _ in items],
                                                   "weights": [w for _, w in items]})
         print(f"  → {rdir / (name + '.parquet')} ({df['qid'].nunique()} câu hỏi)")
