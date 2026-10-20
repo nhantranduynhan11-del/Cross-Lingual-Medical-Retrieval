@@ -1,0 +1,106 @@
+# Cấu hình pipeline truy hồi (mirret) cho Task C1 — intfloat/multilingual-e5-large
+# Biến môi trường MIR_DATA_DIR / MIR_WORK_DIR (nếu có) ghi đè data_dir / work_dir (dùng trên Kaggle).
+paths:
+  data_dir: "."                          # chứa data/ (query, links) và corpus_out/
+  work_dir: "."                          # nơi ghi chunks/, emb/, index/, qtrans/, qemb/, runs/, eval/, submissions/
+  corpus: "corpus_out/corpus"            # kết quả `python -m mircrawl merge` (tương đối với data_dir)
+  queries: "data/query.parquet"
+  links: "data/links_corpus_vi_en_zh.parquet"
+
+seed: 42
+
+chunk:                                   # A + B + C — độ dài tính bằng token BGE-M3 (không tính <s></s>)
+  tokenizer: "BAAI/bge-m3"
+  parent:                                # A. đoạn nộp (chunk_text): theo cấu trúc, không chồng lấn
+    target: 300                          #   gom khối liên tiếp tới khoảng này
+    min: 150                             #   đoạn ngắn hơn được gộp tiếp (trừ khi cả bài ngắn hơn)
+    max: 400                             #   không vượt (bài <= max → 1 đoạn)
+  child:                                 # B. đơn vị tìm kiếm mức mịn, nằm trong từng đoạn cha
+    enabled: true
+    max: 128
+    min: 24                              #   mảnh cuối ngắn hơn → gộp vào mảnh trước
+    min_parent: 160                      #   đoạn cha ngắn hơn không chia con (đoạn cha đã đủ mịn)
+  ctx:                                   # C. ngữ cảnh ghép vào khi lập chỉ mục (KHÔNG nộp)
+    max_chars: 220
+    use_section: false                   #   thêm chuyên mục của trang (breadcrumb) — thường là nhiễu, mặc định tắt
+  skip_dups: true                        # bỏ tài liệu là bản trùng nội dung (dup_of) — đáp án BTC ghi 1 id mỗi nội dung
+  workers: 4
+  out_dir: "chunks"                      # chunks/{parents,children}/part-*.parquet
+
+encode:                                  # intfloat/multilingual-e5-large: dense (mean pool, chuẩn hoá L2); tự động đệm query:/passage:
+  model: "intfloat/multilingual-e5-large"
+  max_length: 512                        # tính cả <s></s>; đầu vào = ngữ cảnh + "\n" + đoạn
+  fp16: true
+  batch_tokens: 16384
+  max_batch: 128
+  block: 100000                          # số đơn vị mỗi khối emb (đơn vị chia việc giữa các máy / GPU)
+  out_dir: "emb_e5"                      # emb_e5/{parents,children}/<khối>/{dense.npy, sparse.npz, ids.parquet, _DONE.json}
+
+index:
+  out_dir: "index_e5"
+  dense:
+    flat_below: 200000                   # ít hơn → IndexFlatIP (chính xác); nhiều hơn → IVF + SQ8
+    nlist: 16384
+    nprobe: 64
+    train_size: 500000
+
+bm25:
+  k1: 1.5
+  b: 0.75
+  levels: [parents]                      # đoạn con chứa đúng chữ của đoạn cha → BM25 trên đoạn cha là đủ (thêm children nếu muốn)
+  vi_tokenizer: pyvi                     # pyvi (tách từ ghép, chậm) | syllable (tách theo âm tiết, nhanh)
+  workers: 4
+  index_dir: null                        # mặc định <index>/bm25; đặt đường dẫn để dùng chỉ mục BM25 dựng ở nơi khác
+
+translate:                               # dịch câu hỏi vi → en → zh bằng LLM mở (<= 14B, phát hành trước 1/6/2026)
+  models:                                # so sánh; tên ngắn → id Hugging Face
+    qwen25_14b: "Qwen/Qwen2.5-14B-Instruct"
+    qwen3_8b: "Qwen/Qwen3-8B"            # Qwen3 không có bản 7B; 8B là bản gần nhất
+    qwen3_14b: "Qwen/Qwen3-14B"
+  use: qwen25_14b                        # bản dịch cho nhánh en/zh = thư mục trong qtrans/ (vd qwen25_14b, qwen3_14b-t2)
+  prompt: t2                             # t1 = bản 15/10 (kết quả ở qtrans/<model>); t2 = sửa theo lỗi đã gặp (qtrans/<model>-t2)
+  glossary: configs/med_glossary_vi.tsv  # gợi ý thuật ngữ cho t2 (đi kèm mã)
+  glossary_max: 10
+  thinking: false                        # Qwen3: true = bật chế độ suy nghĩ (chậm hơn nhiều; thử LIMIT nhỏ trước)
+  quant: "4bit"                          # 4bit (bitsandbytes) để mỗi GPU T4 chạy một bản model
+  batch: 8
+  max_new_tokens: 512
+  out_dir: "qtrans"                      # qtrans/<tên>/records*.jsonl; qtrans/queries_{vi,en,zh}.parquet
+
+retrieve:
+  langs: [vi, en, zh]                    # nhánh ngôn ngữ câu hỏi (vi = câu gốc)
+  methods: [dense, bm25]                 # e5: dense + bm25 (không có LSR)
+  levels: [parents, children]            # dense tìm ở cả hai mức; điểm đoạn con dồn về đoạn cha (RRF trong nhánh)
+  depth: 1000                            # số đoạn cha mỗi nhánh
+  query_batch: 64
+  out_dir: "runs_e5"
+
+fuse:
+  rrf_k: 60
+  depth: 1000
+  configs:                               # tên → danh sách run
+    rrf6: [vi_dense, vi_bm25, en_dense, en_bm25, zh_dense, zh_bm25]
+    rrf_dense3: [vi_dense, en_dense, zh_dense]
+    rrf_vi: [vi_dense, vi_bm25]
+
+rerank:
+  method: cross                          # cross-encoder bge-reranker-v2-m3
+  cross_model: "BAAI/bge-reranker-v2-m3"
+  top_n: 400                             # F2 tính theo TẬP → xếp hạng lại chỉ có ích khi top_n > k_chunk
+  match_lang: true                       # đoạn zh chấm bằng câu hỏi zh, đoạn en bằng câu en (thiếu bản dịch → câu vi)
+  query_max_length: 256
+  doc_max_length: 512
+  batch_tokens: 16384
+
+submit:
+  k_doc: 200                             # tốt nhất trên leaderboard cũ (d200)
+  k_chunk: 185                           # tốt nhất cũ (c185); tự giảm nếu file nén vượt max_zip_mb
+  max_zip_mb: 99
+  out_dir: "submissions"
+
+eval:
+  out_dir: "eval"
+  ks: [10, 20, 50, 100, 185, 200]
+  rel_threshold: 1                       # nhãn >= 1 là liên quan (báo cáo thêm mức nghiêm >= 2)
+  lcs_threshold: 0.4                     # như BTC: LCS token / |đoạn đúng| >= 0,4
+  bootstrap: 1000
