@@ -3,6 +3,10 @@ nguồn → nhập nhãn, đo độ đồng thuận → qrels.parquet. Quy trìn
 
   python -m mirret.judge select [--n 60] [--pilot 6]
         chọn câu hỏi phân tầng theo (độ dài câu hỏi × mức bất đồng giữa các nhánh) → eval/judge/queries.csv
+  python -m mirret.judge select --add 40
+        thêm 40 câu MỚI (cùng cách phân tầng, không trùng câu đã có) vào queries.csv, nhóm "add1" ("add2"…)
+  python -m mirret.judge pool --sets add1 [--branch-depth 5] [--fused …]
+        pool + phiếu chỉ cho các câu của nhóm đó → sheet_add1_<người>.csv; key.parquet được nối thêm
   python -m mirret.judge pool [--branch-depth 10] [--fused rrf9:30,rrf9_colbert:30] [--labelers A,B,C] [--overlap 0.2]
         pool = hợp các đoạn cha trong top của 9 nhánh + run gộp/xếp hạng lại → phiếu (xáo thứ tự, KHÔNG ghi nguồn):
         sheet_pilot_<người>.csv (câu pilot, MỌI người chấm), sheet_pool_<người>.csv (câu chính, chia nhau, --overlap
@@ -50,7 +54,7 @@ def _queries(cfg):
 
 
 # ---------------------------------------------------------------- 1. chọn câu hỏi
-def select(cfg, n=60, pilot=6, k=20, log=print):
+def select(cfg, n=60, pilot=6, k=20, add=0, log=print):
     rdir = cfg.path("runs")
     names = [b for b in BRANCHES if (rdir / f"{b}.parquet").exists()]
     if len(names) < 2:
@@ -68,7 +72,16 @@ def select(cfg, n=60, pilot=6, k=20, log=print):
     df = pd.DataFrame(rows)
     df["len_bin"] = pd.qcut(df["len"].rank(method="first"), 3, labels=["ngắn", "vừa", "dài"])
     df["dis_bin"] = pd.qcut(df["disagree"].rank(method="first"), 3, labels=["đồng thuận", "trung bình", "bất đồng"])
-    rng = random.Random(cfg["seed"])
+    out = jdir(cfg) / "queries.csv"
+    cols = ["qid", "set", "len_bin", "dis_bin", "len", "disagree", "query"]
+    old = pd.read_csv(out, encoding="utf-8-sig") if add else None
+    if add:                                               # thêm câu mới, giữ nguyên các câu (và nhãn) đã có
+        tag = f"add{sum(str(x).startswith('add') for x in old['set'].unique()) + 1}"
+        df = df[~df["qid"].isin(set(old["qid"].astype(int)))]
+        n, pilot = add, 0
+        rng = random.Random(f"{cfg['seed']}-{tag}")
+    else:
+        rng = random.Random(cfg["seed"])
     picked = []
     strata = list(df.groupby(["len_bin", "dis_bin"], observed=True))
     per = max(1, n // len(strata))
@@ -79,11 +92,13 @@ def select(cfg, n=60, pilot=6, k=20, log=print):
     picked += rng.sample(rest, max(0, n - len(picked)))
     rng.shuffle(picked)
     sel = df.set_index("qid").loc[picked].reset_index()
-    sel["set"] = ["pilot" if i < pilot else "main" for i in range(len(sel))]
-    out = jdir(cfg) / "queries.csv"
-    sel[["qid", "set", "len_bin", "dis_bin", "len", "disagree", "query"]].to_csv(out, index=False, encoding="utf-8-sig")
-    log(f"→ {out}: {len(sel)} câu ({pilot} pilot) — phân tầng {len(strata)} tầng theo độ dài × mức bất đồng")
-    log(sel.groupby(["len_bin", "dis_bin"], observed=True).size().to_string())
+    sel["set"] = [tag] * len(sel) if add else ["pilot" if i < pilot else "main" for i in range(len(sel))]
+    if add:
+        sel = pd.concat([old[cols], sel[cols]], ignore_index=True)
+    sel[cols].to_csv(out, index=False, encoding="utf-8-sig")
+    log(f"→ {out}: {len(sel)} câu" + (f" (thêm {n} câu nhóm {tag})" if add else f" ({pilot} pilot)")
+        + f" — phân tầng {len(strata)} tầng theo độ dài × mức bất đồng")
+    log(sel.groupby(["set", "len_bin", "dis_bin"], observed=True).size().unstack("set", fill_value=0).to_string())
 
 
 # ---------------------------------------------------------------- 2. pool + phiếu
@@ -147,12 +162,22 @@ def write_sheets(cfg, items, labelers, overlap, tag, log=print):
         + (f"mọi câu được cả {len(labelers)} người chấm" if overlap >= 1 else f"{n_dup} câu được chấm chéo (2 người)"))
 
 
-def pool(cfg, branch_depth=10, fused="rrf9:30", labelers=("A", "B", "C"), overlap=0.2, log=print):
-    sel = pd.read_csv(jdir(cfg) / "queries.csv")
+def _specs(branch_depth, fused):
+    return [(b, branch_depth) for b in BRANCHES] + [(x.split(":")[0], int(x.split(":")[1]))
+                                                   for x in fused.split(",") if x]
+
+
+def pool(cfg, branch_depth=10, fused="rrf9:30", labelers=("A", "B", "C"), overlap=0.2, sets=None, log=print):
+    sel = pd.read_csv(jdir(cfg) / "queries.csv", encoding="utf-8-sig")
+    if sets:                                               # chỉ nhóm câu mới thêm (select --add) → sheet_<nhóm>_<người>
+        sel = sel[sel["set"].isin(sets.split(","))]
+        if sel.empty:
+            raise SystemExit(f"queries.csv không có câu nhóm {sets}")
+        items = collect(cfg, sel["qid"].astype(int).tolist(), _specs(branch_depth, fused))
+        write_sheets(cfg, items, list(labelers), overlap, sets.replace(",", ""), log)
+        return
     qids = sel["qid"].astype(int).tolist()
-    specs = [(b, branch_depth) for b in BRANCHES] + [(x.split(":")[0], int(x.split(":")[1]))
-                                                     for x in fused.split(",") if x]
-    items = collect(cfg, qids, specs)
+    items = collect(cfg, qids, _specs(branch_depth, fused))
     pilot = set(sel.loc[sel["set"] == "pilot", "qid"].astype(int))
     if pilot:                                              # vòng pilot: mọi người chấm cùng các câu → kappa, sửa hướng dẫn
         write_sheets(cfg, items[items["qid"].isin(pilot)], list(labelers), 1.0, "pilot", log)
@@ -262,13 +287,15 @@ def main():
     ap.add_argument("--labelers", default="A,B,C")
     ap.add_argument("--overlap", type=float, default=0.2)
     ap.add_argument("--adjudicated", default=None)
+    ap.add_argument("--add", type=int, default=0, help="select: thêm N câu mới vào queries.csv đã có")
+    ap.add_argument("--sets", default=None, help="pool: chỉ các câu thuộc nhóm này (vd add1)")
     a = ap.parse_args()
     cfg = config.load(a.config)
     labelers = a.labelers.split(",")
     if a.cmd == "select":
-        select(cfg, a.n, a.pilot)
+        select(cfg, a.n, a.pilot, add=a.add)
     elif a.cmd == "pool":
-        pool(cfg, a.branch_depth, a.fused, labelers, a.overlap)
+        pool(cfg, a.branch_depth, a.fused, labelers, a.overlap, a.sets)
     elif a.cmd == "extend":
         extend(cfg, a.runs, labelers)
     else:
