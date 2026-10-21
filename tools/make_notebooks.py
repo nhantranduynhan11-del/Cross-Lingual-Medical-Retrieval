@@ -237,11 +237,13 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
 **Thử trên bộ nhãn:** thêm file danh sách câu (vd `queries.csv`) làm Input, đặt `QIDS = 'queries.csv'` → chỉ rerank các câu
 đó, ra `runs/<run>_<method>_sub.parquet`, không tạo bài nộp. bge top-400 ~6 s/câu/GPU (đo 19/10).
 """),
-    setup_cell("k5-v3", "RUN = 'rrf9_w'                       # baseline: rrf9_w + cross (đánh giá 19/10)\n"
-                        "METHODS = ['cross']                  # thêm 'colbert' nếu muốn so sánh\n"
+    setup_cell("k5-v4", "RUN = 'rrf9_w'                       # baseline: rrf9_w + cross (đánh giá 19/10)\n"
+                        "METHODS = ['cross']                  # thêm 'colbert' nếu muốn so sánh; [] = chỉ nộp RUN có sẵn\n"
                         "TOP_N = 400\nK_DOC, K_CHUNK = 200, 185\n"
                         "QIDS = ''                            # thử trên bộ nhãn: 'queries.csv' (tìm trong /kaggle/input) "
-                        "hoặc '1,2,3'; '' = cả 1.200 câu",
+                        "hoặc '1,2,3'; '' = cả 1.200 câu\n"
+                        "DOC_AGG = 'max'                      # thứ hạng tài liệu khi nộp: max (đoạn tốt nhất) | sum2 | sum3\n"
+                        "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)",
                "('chunks', 'qtrans')"),
     code('''
 # (2) Xếp hạng lại trên 2 GPU (chia theo câu hỏi), ghi vào /kaggle/working/runs
@@ -278,8 +280,9 @@ for m in METHODS:
 K.set({'retrieve.out_dir': OUT})
 if os.path.abspath(str(RUNS_IN)) != os.path.abspath(OUT):
     shutil.copy(f'{RUNS_IN}/{RUN}.parquet', f'{OUT}/{RUN}.parquet')
-for name in ([] if QIDS else [RUN] + [f'{RUN}_{m}' for m in METHODS]):
-    sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} --k-chunk {K_CHUNK}')
+for name in ([] if QIDS else [RUN] * SUBMIT_RUN + [f'{RUN}_{m}' for m in METHODS]):
+    sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} --k-chunk {K_CHUNK} '
+       f'--doc-agg {DOC_AGG}')
 report('k5')
 '''),
 ])
