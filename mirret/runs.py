@@ -98,26 +98,44 @@ def read_qids(spec):
     return {int(x) for x in p.read_text(encoding="utf-8-sig").split() if x.strip()}
 
 
-def doc_ranking(df):
-    """Run đoạn → thứ hạng tài liệu (điểm tài liệu = đoạn tốt nhất). Thêm cột drank."""
-    d = df.sort_values(["qid", "rank"]).drop_duplicates(["qid", "doc_id"], keep="first").copy()
-    d["drank"] = d.groupby("qid").cumcount() + 1
-    return d
+DOC_AGGS = ("max", "sum2", "sum3")
 
 
-def topk_sets(df, k, level="doc"):
+def doc_ranking(df, agg="max", norm_depth=400):
+    """Run đoạn → thứ hạng tài liệu: một dòng / tài liệu (dòng của đoạn tốt nhất), thêm cột drank.
+    agg='max' : điểm tài liệu = đoạn tốt nhất (thứ hạng nhỏ nhất).
+    agg='sumK': tổng điểm của K đoạn tốt nhất của tài liệu; điểm chuẩn hoá min-max theo câu hỏi trên top-norm_depth đoạn
+                (phần đã rerank; đoạn sâu hơn = 0) — logit có thể âm nên không cộng thẳng. Hoà → đoạn tốt nhất trước."""
+    d = df.sort_values(["qid", "rank"])
+    best = d.drop_duplicates(["qid", "doc_id"], keep="first").copy()
+    if agg == "max":
+        best["drank"] = best.groupby("qid").cumcount() + 1
+        return best
+    if agg not in DOC_AGGS:
+        raise ValueError(f"doc_agg phải là một trong {DOC_AGGS}")
+    s = d["score"].astype(float).where(d["rank"] <= norm_depth)
+    lo, hi = s.groupby(d["qid"]).transform("min"), s.groupby(d["qid"]).transform("max")
+    d = d.assign(_s=((s - lo) / (hi - lo).where(hi > lo, 1.0)).fillna(0.0))
+    top = d[d.groupby(["qid", "doc_id"]).cumcount() < int(agg[3:])]
+    best = best.merge(top.groupby(["qid", "doc_id"], as_index=False)["_s"].sum(), on=["qid", "doc_id"])
+    best = best.sort_values(["qid", "_s", "rank"], ascending=[True, False, True], kind="stable")
+    best["drank"] = best.groupby("qid").cumcount() + 1
+    return best.drop(columns="_s")
+
+
+def topk_sets(df, k, level="doc", agg="max"):
     """{qid: tập doc_id (level='doc', theo thứ hạng tài liệu) hoặc unit_id (level='unit') trong top-k}."""
     if level == "doc":
-        d = doc_ranking(df)
+        d = doc_ranking(df, agg)
         d = d[d["drank"] <= k]
         return {q: set(g["doc_id"]) for q, g in d.groupby("qid")}
     d = df[df["rank"] <= k]
     return {q: set(g["unit_id"]) for q, g in d.groupby("qid")}
 
 
-def topk_lists(df, k, level="doc"):
+def topk_lists(df, k, level="doc", agg="max"):
     if level == "doc":
-        d = doc_ranking(df)
+        d = doc_ranking(df, agg)
         d = d[d["drank"] <= k].sort_values(["qid", "drank"])
         return {q: list(g["doc_id"]) for q, g in d.groupby("qid")}
     d = df[df["rank"] <= k].sort_values(["qid", "rank"])

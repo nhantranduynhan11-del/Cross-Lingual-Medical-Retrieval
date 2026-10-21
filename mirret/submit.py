@@ -1,13 +1,15 @@
 """Tạo bài nộp từ run cuối (đoạn cha).
 
-  relevant_docs  : top k_doc tài liệu (thứ hạng tài liệu = đoạn tốt nhất), doc_id là SỐ NGUYÊN (id của links_corpus;
+  relevant_docs  : top k_doc tài liệu (thứ hạng tài liệu theo submit.doc_agg: max = đoạn tốt nhất, sum2/sum3 = tổng
+                   điểm 2/3 đoạn tốt nhất — runs.doc_ranking), doc_id là SỐ NGUYÊN (id của links_corpus;
                    dự án cũ: ghi dạng chuỗi → máy chấm coi là PMID → 0 điểm)
   relevant_chunks: top k_chunk đoạn cha {"doc_id", "chunk_text"}; chunk_text = chữ thuần nguyên văn của đoạn (không kèm
                    ngữ cảnh). Đoạn gần trùng (>= 0,8, BTC gộp) trong cùng câu hỏi bị bỏ để nhường chỗ.
 Kiểm tra: đủ 1.200 câu, id nguyên, doc_id có trong links, chunk_text khớp chữ thuần của bài (--verify-corpus).
 File nén > submit.max_zip_mb → giảm k_chunk 5% mỗi lần tới khi vừa (báo lại).
 
-  python -m mirret.submit --run runs/rrf9_colbert.parquet [--name bai1] [--k-doc 200] [--k-chunk 185] [--verify-corpus]
+  python -m mirret.submit --run runs/rrf9_colbert.parquet [--name bai1] [--k-doc 200] [--k-chunk 185] [--doc-agg sum2]
+                           [--verify-corpus]
 """
 import argparse
 import json
@@ -24,14 +26,16 @@ def _norm(s):
     return " ".join((s or "").lower().split())
 
 
-def build(run, qids, k_doc, k_chunk, texts):
+def build(run, qids, k_doc, k_chunk, texts, doc_agg="max", norm_depth=400):
     by_q = {q: g.sort_values("rank") for q, g in run.groupby("qid")}
+    dr = runs.doc_ranking(run, doc_agg, norm_depth).sort_values(["qid", "drank"])
+    docs_q = {q: [int(d) for d in g["doc_id"]][:k_doc] for q, g in dr.groupby("qid")}
     sub = []
     for q in qids:
         g = by_q.get(q)
         docs, chunks, seen = [], [], set()
         if g is not None:
-            docs = list(dict.fromkeys(int(d) for d in g["doc_id"]))[:k_doc]
+            docs = docs_q[q]
             for u, d in zip(g["unit_id"], g["doc_id"]):
                 if len(chunks) >= k_chunk:
                     break
@@ -96,20 +100,23 @@ def main():
     ap.add_argument("--name", default=None)
     ap.add_argument("--k-doc", type=int, default=None)
     ap.add_argument("--k-chunk", type=int, default=None)
+    ap.add_argument("--doc-agg", default=None, choices=list(runs.DOC_AGGS),
+                    help="thứ hạng tài liệu: max (đoạn tốt nhất) | sum2 | sum3 (mặc định submit.doc_agg)")
     ap.add_argument("--verify-corpus", action="store_true", help="đối chiếu chunk_text với chữ thuần của bài (chậm hơn)")
     a = ap.parse_args()
     cfg = config.load(a.config)
     sc = cfg["submit"]
     k_doc, k_chunk = a.k_doc or sc["k_doc"], a.k_chunk or sc["k_chunk"]
+    doc_agg = a.doc_agg or sc.get("doc_agg", "max")
     qids = [int(x) for x in pq.read_table(cfg.path("queries"), columns=["id"]).column("id").to_pylist()]
     run = runs.read(a.run, depth=max(k_doc * 3, k_chunk + 100))
     ids = run[run["rank"] <= k_chunk + 100]["unit_id"].unique().tolist()
     texts = {u: r[2] for u, r in unit_rows(cfg, ids).items()}
     link_ids = set(pq.read_table(cfg.path("links"), columns=["id"]).column("id").to_pylist())
-    name = a.name or Path(a.run).stem
+    name = a.name or Path(a.run).stem + ("" if doc_agg == "max" else f"_{doc_agg}")
     out_dir = cfg.path("submissions")
     while True:
-        sub = build(run, qids, k_doc, k_chunk, texts)
+        sub = build(run, qids, k_doc, k_chunk, texts, doc_agg, cfg["rerank"]["top_n"])
         plains = corpus_plains(cfg, {c["doc_id"] for s in sub for c in s["relevant_chunks"]}) if a.verify_corpus else None
         errs = validate(sub, qids, link_ids, plains)
         if errs:
@@ -124,7 +131,7 @@ def main():
         k_chunk = k_new
     n_chunks = sum(len(s["relevant_chunks"]) for s in sub)
     (out_dir / f"{name}_meta.json").write_text(json.dumps(
-        {"run": a.run, "k_doc": k_doc, "k_chunk": k_chunk, "zip_mb": round(mb, 1), "queries": len(sub),
+        {"run": a.run, "k_doc": k_doc, "k_chunk": k_chunk, "doc_agg": doc_agg, "zip_mb": round(mb, 1), "queries": len(sub),
          "chunks": n_chunks}, indent=1), encoding="utf-8")
     print(f"Hợp lệ: {len(sub)} câu hỏi, {n_chunks:,} đoạn, k_doc={k_doc}, k_chunk={k_chunk} → {zp} ({mb:.1f} MB)")
 
