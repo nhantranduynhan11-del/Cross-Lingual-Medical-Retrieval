@@ -113,6 +113,7 @@ rerank:
 submit:
   k_doc: 200                             # tốt nhất trên leaderboard cũ (d200)
   k_chunk: 185                           # tốt nhất cũ (c185); tự giảm nếu file nén vượt max_zip_mb
+  doc_agg: max                           # thứ hạng tài liệu: max = đoạn tốt nhất | sum2 / sum3 = tổng điểm 2/3 đoạn tốt nhất
   max_zip_mb: 99
   out_dir: "submissions"
 

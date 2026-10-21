@@ -111,11 +111,16 @@ def collect(cfg, qids, specs):
     rdir = cfg.path("runs")
     rows = []
     for name, depth in specs:
-        p = rdir / f"{name}.parquet"
+        base, _, agg = name.partition("~")                # "run~sum2": đoạn tốt nhất của top-K TÀI LIỆU theo cách gộp đó
+        p = rdir / f"{base}.parquet"
         if not p.exists():
-            print(f"  [bỏ qua] thiếu run {name}")
+            print(f"  [bỏ qua] thiếu run {base}")
             continue
-        df = runs.read(p, depth=depth, qids=qids)
+        if agg:
+            df = runs.doc_ranking(runs.read(p, depth=depth * 30, qids=qids), agg)
+            df = df[df["drank"] <= depth].assign(rank=lambda x: x["drank"])
+        else:
+            df = runs.read(p, depth=depth, qids=qids)
         for q, u, d, r in zip(df["qid"], df["unit_id"], df["doc_id"], df["rank"]):
             rows.append((int(q), u, int(d), f"{name}@{int(r)}"))
     df = pd.DataFrame(rows, columns=["qid", "unit_id", "doc_id", "src"])

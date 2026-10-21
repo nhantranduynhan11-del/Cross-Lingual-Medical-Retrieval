@@ -95,14 +95,16 @@ class Judged:
         return out
 
 
-def score_run(df, J, ks):
-    """→ DataFrame theo câu hỏi với các chỉ số ở từng K."""
+def score_run(df, J, ks, doc_agg="max", norm_depth=400):
+    """→ DataFrame theo câu hỏi với các chỉ số ở từng K. Danh sách tài liệu = runs.doc_ranking(doc_agg) như bài nộp."""
     by_q = {q: g.sort_values("rank") for q, g in df.groupby("qid")}
+    dr = runs.doc_ranking(df, doc_agg, norm_depth).sort_values(["qid", "drank"])
+    docs_q = {q: list(g["doc_id"]) for q, g in dr.groupby("qid")}
     rows = []
     for q in J.qids():
         g = by_q.get(q)
         units = list(zip(g["unit_id"], g["doc_id"])) if g is not None else []
-        docs = list(dict.fromkeys(d for _, d in units))
+        docs = docs_q.get(q, [])
         jd = J.judged_docs.get(q, {})
         Rd = {d for d, gr in jd.items() if gr >= J.thr}
         ju = J.judged_units.get(q, {})
@@ -173,11 +175,20 @@ def summarize(per_q, ks, nb):
     return out
 
 
-def cmd_score(cfg, names, baseline, ks, log=print):
+def doc_depth(cfg, ks):
+    """Số đoạn đọc vào: đủ sâu để có k_doc tài liệu như submit (max(k_doc·3, k_chunk + 100)), không chỉ max(ks) đoạn."""
+    sc = cfg["submit"]
+    return max(max(ks), sc["k_doc"] * 3, sc["k_chunk"] + 100)
+
+
+def cmd_score(cfg, names, baseline, ks, doc_aggs=("max",), log=print):
+    """doc_aggs khác 'max' → thêm dòng <run>~<agg> (chỉ đổi thứ hạng tài liệu; chỉ số đoạn giống run gốc)."""
     ec = cfg["eval"]
-    qrels, have, text = load(cfg, names, max(ks))
+    qrels, have, text = load(cfg, names, doc_depth(cfg, ks))
     J = Judged(qrels, ec["rel_threshold"], ec["lcs_threshold"], text)
-    res = {n: score_run(df, J, ks) for n, df in have.items()}
+    nd = cfg["rerank"]["top_n"]
+    res = {(n if agg == "max" else f"{n}~{agg}"): score_run(df, J, ks, agg, nd)
+           for n, df in have.items() for agg in doc_aggs}
     out = cfg.path("eval")
     summ = {n: summarize(pq_, ks, ec["bootstrap"]) for n, pq_ in res.items()}
     for n, pq_ in res.items():
@@ -225,7 +236,7 @@ def cmd_marginal(cfg, k, log=print):
     bỏ từng nhánh khỏi RRF: thay đổi doc R@k và doc F2@k (có KTC)."""
     ec = cfg["eval"]
     names = [b for b in BRANCHES if (cfg.path("runs") / f"{b}.parquet").exists()]
-    qrels, have, text = load(cfg, names, max(k, 200))
+    qrels, have, text = load(cfg, names, doc_depth(cfg, [max(k, 200)]))
     J = Judged(qrels, ec["rel_threshold"], ec["lcs_threshold"], text)
     tops = {n: runs.topk_lists(df, k, "doc") for n, df in have.items()}
     rel = {q: {d for d, g in J.judged_docs.get(q, {}).items() if g >= J.thr} for q in J.qids()}
@@ -335,12 +346,13 @@ def main():
     ap.add_argument("--baseline", default="rrf9")
     ap.add_argument("--ks", default=None)
     ap.add_argument("--k", type=int, default=50)
+    ap.add_argument("--doc-agg", default="max", help="score: cách gộp đoạn → tài liệu, vd 'max,sum2,sum3' (runs.DOC_AGGS)")
     a = ap.parse_args()
     cfg = config.load(a.config)
     ks = [int(x) for x in a.ks.split(",")] if a.ks else cfg["eval"]["ks"]
     if a.cmd == "score":
         names = a.runs.split(",") if a.runs else BRANCHES + list(cfg["fuse"]["configs"])
-        cmd_score(cfg, names, a.baseline, ks)
+        cmd_score(cfg, names, a.baseline, ks, a.doc_agg.split(","))
     elif a.cmd == "marginal":
         cmd_marginal(cfg, a.k)
     else:
