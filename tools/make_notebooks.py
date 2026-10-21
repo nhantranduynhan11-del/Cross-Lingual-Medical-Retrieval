@@ -434,11 +434,16 @@ for d in locate_all('qtrans'):
     for f in glob.glob(f'{d}/qtrans/*/records*.jsonl'):
         dst = f'{QT}/' + os.path.relpath(f, f'{d}/qtrans')
         os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy(f, dst)
-for d in locate_all('qexp'):
+def take(src, dst):                                   # trùng tên giữa các phiên → giữ bản lớn hơn (nhiều câu hơn)
+    if not os.path.exists(dst) or os.path.getsize(src) > os.path.getsize(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy(src, dst); print('chép', src)
+for d in locate_all('qexp'):                           # output k7 phiên trước: đoạn giả, chỉ mục dense, run biến thể
     for f in glob.glob(f'{d}/qexp/*/records*.jsonl'):
-        dst = f'{K.work}/qexp/' + os.path.relpath(f, f'{d}/qexp')
-        if not os.path.exists(dst):
-            os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy(f, dst); print('chép', f)
+        take(f, f'{K.work}/qexp/' + os.path.relpath(f, f'{d}/qexp'))
+    for f in glob.glob(f'{d}/index/dense_*'):
+        take(f, f'{K.work}/index/' + os.path.basename(f))
+    for f in glob.glob(f'{d}/runs/**/*.parquet', recursive=True) + glob.glob(f'{d}/runs/*.json'):
+        take(f, f'{K.work}/runs/' + os.path.relpath(f, f'{d}/runs'))
 copied = []
 for f in glob.glob(f'{base}/runs/*.parquet'):
     if '@' not in os.path.basename(f):
@@ -474,9 +479,17 @@ for m in MODES:
 '''),
     code('''
 # (6) 9 nhánh cho mỗi biến thể (bm25c: chỉ BM25) → gộp; độ trùng top-100 với nhánh baseline (không cần nhãn)
+import pandas as pd
+def done(m, methods):                                  # đủ nhánh của phiên trước, đủ số câu của biến thể → bỏ qua
+    n = pd.read_parquet(glob.glob(f'{K.work}/qexp/{m}/queries_vi*.parquet')[0]).shape[0]
+    fs = [f'{RUNS}/{m}_{lg}_{me}.parquet' for lg in ('vi', 'en', 'zh') for me in methods]
+    return all(os.path.exists(f) and pd.read_parquet(f, columns=['qid'])['qid'].nunique() >= n - 5 for f in fs)
 for m in MODES:
+    if done(m, ('dense', 'lsr', 'bm25')):
+        print(m, ': 9 nhánh đã có từ phiên trước → bỏ qua truy xuất'); continue
     sh(f'python -m mirret.retrieve run --config {K.cfg} --emb {EMB} --variant {m}', f'retrieve_{m}')
-sh(f'python -m mirret.retrieve run --config {K.cfg} --methods bm25 --variant bm25c', 'retrieve_bm25c')
+if not done('bm25c', ('bm25',)):
+    sh(f'python -m mirret.retrieve run --config {K.cfg} --methods bm25 --variant bm25c', 'retrieve_bm25c')
 sh(f'python -m mirret.fuse --config {K.cfg} --only {",".join(FUSED)}', 'fuse')
 import pandas as pd
 from mirret import runs as R
