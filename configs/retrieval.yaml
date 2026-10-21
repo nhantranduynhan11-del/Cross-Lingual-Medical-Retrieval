@@ -97,6 +97,8 @@ fuse:
     hyde9: [hyde_vi_dense, hyde_vi_lsr, hyde_vi_bm25, hyde_en_dense, "hyde_en_lsr*0.5", "hyde_en_bm25*0.5", hyde_zh_dense, hyde_zh_lsr, hyde_zh_bm25]
     q2dlex: [vi_dense, q2d_vi_lsr, q2d_vi_bm25, en_dense, "q2d_en_lsr*0.5", "q2d_en_bm25*0.5", zh_dense, q2d_zh_lsr, q2d_zh_bm25]
     bm25c9: [vi_dense, vi_lsr, bm25c_vi_bm25, en_dense, "en_lsr*0.5", "bm25c_en_bm25*0.5", zh_dense, zh_lsr, bm25c_zh_bm25]
+    # B3 (22/10): fusion tuyến tính theo điểm thay RRF, cùng nhánh / trọng số với rrf9_w; α = 0,7; trên 80 câu có nhãn tập 400 ứng viên mất ~10% tài liệu liên quan so với rrf9_w → không dùng
+    lin07: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25]}
 
 rerank:
   method: cross                          # BASELINE: cross (bge-reranker-v2-m3; hơn rrf9 có ý nghĩa, cùng dấu 2 nửa) | colbert
