@@ -36,12 +36,13 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--out", default="results/mix_submit")
     ap.add_argument("--k-doc", type=int, default=None)
+    ap.add_argument("--k-chunk", type=int, default=None, help="cắt danh sách đoạn còn k đoạn đầu (mặc định giữ nguyên)")
     ap.add_argument("--doc-agg", default="max", choices=list(runs.DOC_AGGS))
     a = ap.parse_args()
     cfg = config.load(a.config)
     k_doc = a.k_doc or cfg["submit"]["k_doc"]
     docs = doc_lists(a.docs, k_doc, a.doc_agg, cfg["rerank"]["top_n"])
-    chunks = {int(s["id"]): s["relevant_chunks"] for s in json.loads(Path(a.chunks).read_text("utf-8"))}
+    chunks = {int(s["id"]): s["relevant_chunks"][:a.k_chunk] for s in json.loads(Path(a.chunks).read_text("utf-8"))}
     qids = [int(x) for x in pq.read_table(cfg.path("queries"), columns=["id"]).column("id").to_pylist()]
     sub = [{"id": q, "relevant_docs": docs.get(q, []), "relevant_chunks": chunks.get(q, [])} for q in qids]
     link_ids = set(pq.read_table(cfg.path("links"), columns=["id"]).column("id").to_pylist())
@@ -50,7 +51,7 @@ def main():
         print(f"LỖI ({len(errs)}), KHÔNG ghi bài nộp:\n  " + "\n  ".join(errs[:30]))
         raise SystemExit(1)
     js, zp = submit.write(sub, a.out, a.name)
-    meta = {"docs_from": a.docs, "chunks_from": a.chunks, "k_doc": k_doc, "doc_agg": a.doc_agg,
+    meta = {"docs_from": a.docs, "chunks_from": a.chunks, "k_doc": k_doc, "k_chunk": a.k_chunk, "doc_agg": a.doc_agg,
             "queries": len(sub), "chunks": sum(len(s["relevant_chunks"]) for s in sub), "zip_mb": round(zp.stat().st_size / 1e6, 1)}
     (Path(a.out) / f"{a.name}_meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"Hợp lệ: {len(sub)} câu, tài liệu từ {Path(a.docs).name}, đoạn từ {Path(a.chunks).name} → {zp} ({meta['zip_mb']} MB)")
