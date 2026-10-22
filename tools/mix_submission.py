@@ -6,6 +6,9 @@ links) rồi ghi <out_dir>/<name>.json + .zip. Chạy trên máy, không cần m
 
   python tools/mix_submission.py --docs results/lin07q/runs/lin07q_cross.parquet \
       --chunks results/lin07s/submissions/lin07_cross.json --name mix_lin07qD_lin07C --out results/mix_submit
+Cắt số tài liệu THEO TỪNG CÂU (--auto-probs run_qwen3.parquet): p(tài liệu) = max P(yes) của các đoạn của nó trong top-N
+đã rerank (ngoài top-N = 0); theo thứ tự tài liệu của --docs, chọn k ∈ [--k-min, k_doc] tối đa kỳ vọng F2 ≈ 5·Σ_{i≤k} p_i /
+(4·Σ_all p + k). Không có tham số dò; câu không có trong run xác suất giữ k_doc.
 """
 import argparse
 import json
@@ -27,6 +30,32 @@ def doc_lists(path, k_doc, agg="max", norm_depth=400):
     return {int(q): [int(d) for d in g["doc_id"]][:k_doc] for q, g in dr.groupby("qid")}
 
 
+def auto_k(docs, prob_run, k_min, k_max, top_n=400):
+    import numpy as np
+    r = runs.read(prob_run)
+    r = r.assign(p=r["score"].where(r["rank"] <= top_n, 0.0).clip(0, 1))
+    pdoc = r.groupby(["qid", "doc_id"])["p"].max()
+    tot = pdoc.groupby(level=0).sum()
+    out, ks = {}, []
+    for q, ds in docs.items():
+        if q not in tot.index:
+            out[q] = ds
+            continue
+        pq_ = pdoc.loc[q]
+        p = np.array([pq_.get(d, 0.0) for d in ds])
+        k = np.arange(1, len(p) + 1)
+        ef2 = 5 * np.cumsum(p) / (4 * tot.loc[q] + k)
+        lo, hi = min(k_min, len(p)), min(k_max, len(p))
+        kq = int(lo + np.argmax(ef2[lo - 1:hi]))
+        out[q] = ds[:kq]
+        ks.append(kq)
+    if ks:
+        ks = np.array(ks)
+        print(f"  cắt theo câu ({len(ks)} câu có xác suất): k trung vị {int(np.median(ks))}, ={k_min}: {(ks == k_min).mean():.0%}, "
+              f"={k_max}: {(ks == k_max).mean():.0%}")
+    return out
+
+
 def main():
     config.stdout_utf8()
     ap = argparse.ArgumentParser()
@@ -38,10 +67,14 @@ def main():
     ap.add_argument("--k-doc", type=int, default=None)
     ap.add_argument("--k-chunk", type=int, default=None, help="cắt danh sách đoạn còn k đoạn đầu (mặc định giữ nguyên)")
     ap.add_argument("--doc-agg", default="max", choices=list(runs.DOC_AGGS))
+    ap.add_argument("--auto-probs", default=None, help="run có điểm P(yes) (qwen3/qwen3i) → cắt số tài liệu theo từng câu")
+    ap.add_argument("--k-min", type=int, default=100, help="--auto-probs: số tài liệu tối thiểu mỗi câu")
     a = ap.parse_args()
     cfg = config.load(a.config)
     k_doc = a.k_doc or cfg["submit"]["k_doc"]
     docs = doc_lists(a.docs, k_doc, a.doc_agg, cfg["rerank"]["top_n"])
+    if a.auto_probs:
+        docs = auto_k(docs, a.auto_probs, a.k_min, k_doc, cfg["rerank"]["top_n"])
     chunks = {int(s["id"]): s["relevant_chunks"][:a.k_chunk] for s in json.loads(Path(a.chunks).read_text("utf-8"))}
     qids = [int(x) for x in pq.read_table(cfg.path("queries"), columns=["id"]).column("id").to_pylist()]
     sub = [{"id": q, "relevant_docs": docs.get(q, []), "relevant_chunks": chunks.get(q, [])} for q in qids]
@@ -52,6 +85,7 @@ def main():
         raise SystemExit(1)
     js, zp = submit.write(sub, a.out, a.name)
     meta = {"docs_from": a.docs, "chunks_from": a.chunks, "k_doc": k_doc, "k_chunk": a.k_chunk, "doc_agg": a.doc_agg,
+            "auto_probs": a.auto_probs, "k_min": a.k_min if a.auto_probs else None,
             "queries": len(sub), "chunks": sum(len(s["relevant_chunks"]) for s in sub), "zip_mb": round(zp.stat().st_size / 1e6, 1)}
     (Path(a.out) / f"{a.name}_meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"Hợp lệ: {len(sub)} câu, tài liệu từ {Path(a.docs).name}, đoạn từ {Path(a.chunks).name} → {zp} ({meta['zip_mb']} MB)")
