@@ -247,6 +247,9 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                "('chunks', 'qtrans')"),
     code('''
 # (2) Xếp hạng lại trên 2 GPU (chia theo câu hỏi), ghi vào /kaggle/working/runs
+NAMES = [x.strip() for x in RUN.split(',') if x.strip()]  # METHODS = [] → nộp được nhiều run có sẵn: 'a,b,c'
+assert len(NAMES) == 1 or not METHODS, 'Nhiều RUN chỉ dùng với METHODS = [] (chỉ tạo bài nộp)'
+RUN = NAMES[0]
 hits = locate_all(f'runs/{RUN}.parquet') or locate_all('runs/vi_dense.parquet')   # bỏ qua runs/ của output k5 cũ
 assert hits, (f'Không thấy runs/{RUN}.parquet hay 9 nhánh (runs/vi_dense.parquet…) trong /kaggle/input: '
               'Add Input mir2-runs (output k4)')
@@ -280,7 +283,11 @@ for m in METHODS:
 K.set({'retrieve.out_dir': OUT})
 if os.path.abspath(str(RUNS_IN)) != os.path.abspath(OUT):
     shutil.copy(f'{RUNS_IN}/{RUN}.parquet', f'{OUT}/{RUN}.parquet')
-for name in ([] if QIDS else [RUN] * SUBMIT_RUN + [f'{RUN}_{m}' for m in METHODS]):
+for n in NAMES[1:]:
+    h = locate_all(f'runs/{n}.parquet')
+    assert h, f'Không thấy runs/{n}.parquet trong /kaggle/input'
+    shutil.copy(h[0] / 'runs' / f'{n}.parquet', f'{OUT}/{n}.parquet')
+for name in ([] if QIDS else [RUN] * SUBMIT_RUN + NAMES[1:] + [f'{RUN}_{m}' for m in METHODS]):
     sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} --k-chunk {K_CHUNK} '
        f'--doc-agg {DOC_AGG}')
 report('k5')
