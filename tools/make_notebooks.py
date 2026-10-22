@@ -237,12 +237,14 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
 **Thử trên bộ nhãn:** thêm file danh sách câu (vd `queries.csv`) làm Input, đặt `QIDS = 'queries.csv'` → chỉ rerank các câu
 đó, ra `runs/<run>_<method>_sub.parquet`, không tạo bài nộp. bge top-400 ~6 s/câu/GPU (đo 19/10).
 """),
-    setup_cell("k5-v4", "RUN = 'rrf9_w'                       # baseline: rrf9_w + cross (đánh giá 19/10)\n"
+    setup_cell("k5-v5", "RUN = 'rrf9_w'                       # baseline: rrf9_w + cross (đánh giá 19/10)\n"
                         "METHODS = ['cross']                  # thêm 'colbert' nếu muốn so sánh; [] = chỉ nộp RUN có sẵn\n"
                         "TOP_N = 400\nK_DOC, K_CHUNK = 200, 185\n"
                         "QIDS = ''                            # thử trên bộ nhãn: 'queries.csv' (tìm trong /kaggle/input) "
                         "hoặc '1,2,3'; '' = cả 1.200 câu\n"
                         "DOC_AGG = 'max'                      # thứ hạng tài liệu khi nộp: max (đoạn tốt nhất) | sum2 | sum3\n"
+                        "MAX_PER_DOC = [0]                    # tối đa n đoạn mỗi tài liệu trong 185 đoạn; [0] = không giới hạn; "
+                        "[1, 2] = 2 bài nộp _mpd1, _mpd2\n"
                         "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)",
                "('chunks', 'qtrans')"),
     code('''
@@ -288,8 +290,9 @@ for n in NAMES[1:]:
     assert h, f'Không thấy runs/{n}.parquet trong /kaggle/input'
     shutil.copy(h[0] / 'runs' / f'{n}.parquet', f'{OUT}/{n}.parquet')
 for name in ([] if QIDS else [RUN] * SUBMIT_RUN + NAMES[1:] + [f'{RUN}_{m}' for m in METHODS]):
-    sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} --k-chunk {K_CHUNK} '
-       f'--doc-agg {DOC_AGG}')
+    for mpd in MAX_PER_DOC:
+        sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} --k-chunk {K_CHUNK} '
+           f'--doc-agg {DOC_AGG} --max-per-doc {mpd}')
 report('k5')
 '''),
 ])

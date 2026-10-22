@@ -26,19 +26,35 @@ def _norm(s):
     return " ".join((s or "").lower().split())
 
 
-def build(run, qids, k_doc, k_chunk, texts, doc_agg="max", norm_depth=400):
+def pick_units(g, k, max_per_doc=0):
+    """Đoạn theo thứ hạng; max_per_doc > 0 → mỗi tài liệu tối đa n đoạn (gold ~1 đoạn / tài liệu: nhường chỗ cho tài
+    liệu kế tiếp thay vì đoạn thứ 3–7 của cùng tài liệu)."""
+    cnt, out = {}, []
+    for u, d in zip(g["unit_id"], g["doc_id"]):
+        if len(out) >= k:
+            break
+        if max_per_doc and cnt.get(d, 0) >= max_per_doc:
+            continue
+        cnt[d] = cnt.get(d, 0) + 1
+        out.append((u, d))
+    return out
+
+
+def build(run, qids, k_doc, k_chunk, texts, doc_agg="max", norm_depth=400, max_per_doc=0):
     by_q = {q: g.sort_values("rank") for q, g in run.groupby("qid")}
     dr = runs.doc_ranking(run, doc_agg, norm_depth).sort_values(["qid", "drank"])
     docs_q = {q: [int(d) for d in g["doc_id"]][:k_doc] for q, g in dr.groupby("qid")}
     sub = []
     for q in qids:
         g = by_q.get(q)
-        docs, chunks, seen = [], [], set()
+        docs, chunks, seen, cnt = [], [], set(), {}
         if g is not None:
             docs = docs_q[q]
             for u, d in zip(g["unit_id"], g["doc_id"]):
                 if len(chunks) >= k_chunk:
                     break
+                if max_per_doc and cnt.get(d, 0) >= max_per_doc:
+                    continue
                 t = texts.get(u)
                 if not t:
                     continue
@@ -46,6 +62,7 @@ def build(run, qids, k_doc, k_chunk, texts, doc_agg="max", norm_depth=400):
                 if key in seen:
                     continue
                 seen.add(key)
+                cnt[d] = cnt.get(d, 0) + 1
                 chunks.append({"doc_id": int(d), "chunk_text": t})
         sub.append({"id": int(q), "relevant_docs": docs, "relevant_chunks": chunks})
     return sub
@@ -102,21 +119,28 @@ def main():
     ap.add_argument("--k-chunk", type=int, default=None)
     ap.add_argument("--doc-agg", default=None, choices=list(runs.DOC_AGGS),
                     help="thứ hạng tài liệu: max (đoạn tốt nhất) | sum2 | sum3 (mặc định submit.doc_agg)")
+    ap.add_argument("--max-per-doc", type=int, default=None,
+                    help="tối đa n đoạn mỗi tài liệu trong danh sách đoạn (0 = không giới hạn; mặc định submit.max_per_doc)")
     ap.add_argument("--verify-corpus", action="store_true", help="đối chiếu chunk_text với chữ thuần của bài (chậm hơn)")
     a = ap.parse_args()
     cfg = config.load(a.config)
     sc = cfg["submit"]
     k_doc, k_chunk = a.k_doc or sc["k_doc"], a.k_chunk or sc["k_chunk"]
     doc_agg = a.doc_agg or sc.get("doc_agg", "max")
+    mpd = a.max_per_doc if a.max_per_doc is not None else int(sc.get("max_per_doc", 0) or 0)
     qids = [int(x) for x in pq.read_table(cfg.path("queries"), columns=["id"]).column("id").to_pylist()]
     run = runs.read(a.run, depth=max(k_doc * 3, k_chunk + 100))
-    ids = run[run["rank"] <= k_chunk + 100]["unit_id"].unique().tolist()
+    if mpd:                                               # đoạn được chọn có thể nằm sâu hơn k_chunk + 100
+        ids = list({u for _, g in run.sort_values(["qid", "rank"]).groupby("qid")
+                     for u, _ in pick_units(g, k_chunk + 100, mpd)})
+    else:
+        ids = run[run["rank"] <= k_chunk + 100]["unit_id"].unique().tolist()
     texts = {u: r[2] for u, r in unit_rows(cfg, ids).items()}
     link_ids = set(pq.read_table(cfg.path("links"), columns=["id"]).column("id").to_pylist())
-    name = a.name or Path(a.run).stem + ("" if doc_agg == "max" else f"_{doc_agg}")
+    name = a.name or Path(a.run).stem + ("" if doc_agg == "max" else f"_{doc_agg}") + (f"_mpd{mpd}" if mpd else "")
     out_dir = cfg.path("submissions")
     while True:
-        sub = build(run, qids, k_doc, k_chunk, texts, doc_agg, cfg["rerank"]["top_n"])
+        sub = build(run, qids, k_doc, k_chunk, texts, doc_agg, cfg["rerank"]["top_n"], mpd)
         plains = corpus_plains(cfg, {c["doc_id"] for s in sub for c in s["relevant_chunks"]}) if a.verify_corpus else None
         errs = validate(sub, qids, link_ids, plains)
         if errs:
@@ -131,7 +155,7 @@ def main():
         k_chunk = k_new
     n_chunks = sum(len(s["relevant_chunks"]) for s in sub)
     (out_dir / f"{name}_meta.json").write_text(json.dumps(
-        {"run": a.run, "k_doc": k_doc, "k_chunk": k_chunk, "doc_agg": doc_agg, "zip_mb": round(mb, 1), "queries": len(sub),
+        {"run": a.run, "k_doc": k_doc, "k_chunk": k_chunk, "doc_agg": doc_agg, "max_per_doc": mpd, "zip_mb": round(mb, 1), "queries": len(sub),
          "chunks": n_chunks}, indent=1), encoding="utf-8")
     print(f"Hợp lệ: {len(sub)} câu hỏi, {n_chunks:,} đoạn, k_doc={k_doc}, k_chunk={k_chunk} → {zp} ({mb:.1f} MB)")
 
