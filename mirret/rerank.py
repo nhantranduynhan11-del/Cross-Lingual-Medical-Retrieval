@@ -1,9 +1,11 @@
 """Stage 2: xếp hạng lại top-N ứng viên (đoạn cha) của run gộp Stage 1.
 
-Hai phương pháp (rerank.method):
+Phương pháp (rerank.method):
   colbert : multi-vector của BGE-M3, MaxSim như FlagEmbedding: (1/|q|) Σ_i max_j <q_i, d_j> (mir/rerank.py cũ — tốt
             nhất trên leaderboard cũ: 0,1674). Vector ColBERT chỉ tính cho câu hỏi + N ứng viên, không lưu cả kho.
   cross   : cross-encoder (mặc định BAAI/bge-reranker-v2-m3, đa ngôn ngữ): điểm = logit của cặp (câu hỏi, đoạn).
+  qwen3   : LLM reranker (rerank.qwen3_model, mặc định Qwen3-Reranker-4B): điểm = P(yes) / (P(yes) + P(no)),
+            instruction mặc định của model. qwen3i: như qwen3 với instruction y khoa tiếng Anh.
 Ứng viên = ngữ cảnh + "\\n" + đoạn (C). rerank.match_lang: đoạn zh chấm bằng câu hỏi zh, đoạn en bằng câu en (thiếu bản
 dịch → câu vi) — dự án cũ: điểm câu vi với đoạn zh đúng chỉ 0,21–0,95, câu dịch zh cho 0,97–0,999.
 Kết quả: top-N theo điểm mới, nối thêm phần đuôi (hạng > N) của run gốc → run đủ độ sâu.
@@ -94,6 +96,58 @@ class CrossScorer:
         return out
 
 
+class Qwen3Scorer:
+    """Qwen3-Reranker (LLM yes/no): điểm = P(yes) / (P(yes) + P(no)) ở token cuối, theo định dạng của model card."""
+    PREFIX = ("<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct "
+              "provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n")
+    SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    DEFAULT_INSTRUCT = "Given a web search query, retrieve relevant passages that answer the query"
+    MED_INSTRUCT = "Given a Vietnamese medical question, retrieve passages that answer the question"
+
+    def __init__(self, name, device="cuda:0", fp16=True, max_length=768, instruct=None):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        self.torch = torch
+        self.tok = AutoTokenizer.from_pretrained(name, padding_side="left")
+        self.device = torch.device(device)
+        dtype = torch.float16 if fp16 and self.device.type == "cuda" else torch.float32
+        self.model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype).to(self.device).eval()
+        self.yes = self.tok.convert_tokens_to_ids("yes")
+        self.no = self.tok.convert_tokens_to_ids("no")
+        self.pre = self.tok.encode(self.PREFIX, add_special_tokens=False)
+        self.suf = self.tok.encode(self.SUFFIX, add_special_tokens=False)
+        self.max_length = max_length            # phần <Instruct>/<Query>/<Document>, chưa tính PREFIX/SUFFIX
+        self.instruct = instruct or self.DEFAULT_INSTRUCT
+
+    def score(self, pairs, batch_tokens=8192, max_batch=32):
+        torch = self.torch
+        texts = [f"<Instruct>: {self.instruct}\n<Query>: {q}\n<Document>: {d}" for q, d in pairs]
+        body = self.tok(texts, truncation=True, max_length=self.max_length, add_special_tokens=False)["input_ids"]
+        enc = [self.pre + b + self.suf for b in body]
+        order = sorted(range(len(pairs)), key=lambda i: -len(enc[i]))
+        out = np.zeros(len(pairs), dtype=np.float32)
+        pad = self.tok.pad_token_id
+        b = []
+
+        def flush(b):
+            L = max(len(enc[i]) for i in b)
+            inp = torch.tensor([[pad] * (L - len(enc[i])) + enc[i] for i in b], device=self.device)
+            mask = torch.tensor([[0] * (L - len(enc[i])) + [1] * len(enc[i]) for i in b], device=self.device)
+            with torch.inference_mode():
+                # logits_to_keep=1: chỉ tính logits token cuối (logits đủ độ dài × 151k từ vựng không vừa T4)
+                logits = self.model(input_ids=inp, attention_mask=mask, logits_to_keep=1).logits[:, -1, :]
+            yn = torch.stack([logits[:, self.no], logits[:, self.yes]], dim=1).float()
+            out[b] = torch.softmax(yn, dim=1)[:, 1].cpu().numpy()
+        for i in order:
+            if b and (len(b) + 1 > max_batch or (len(b) + 1) * len(enc[b[0]]) > batch_tokens):
+                flush(b)
+                b = []
+            b.append(i)
+        if b:
+            flush(b)
+        return out
+
+
 def rerank(cfg, df, method, device, log=print):
     """df: run đã cắt top-N (đoạn cha). → run mới với điểm của reranker."""
     rc, ec = cfg["rerank"], cfg["encode"]
@@ -121,6 +175,26 @@ def rerank(cfg, df, method, device, log=print):
                                      "rank": g["rank"].values, "score": sc}))
             if (n + 1) % 50 == 0:
                 log(f"  {n + 1} câu hỏi, {(time.time() - t0) / (n + 1):.2f}s/câu")
+    elif method in ("qwen3", "qwen3i"):
+        sc = Qwen3Scorer(rc["qwen3_model"], device, True, rc["query_max_length"] + rc["doc_max_length"],
+                         Qwen3Scorer.MED_INSTRUCT if method == "qwen3i" else None)
+        npairs, t0 = 0, time.time()                         # không tính thời gian tải / nạp model
+        for n, (q, g) in enumerate(df.groupby("qid", sort=True)):
+            ids = g["unit_id"].tolist()
+            pairs = [(pick_query(qs, q, rows[u][0], rc["match_lang"])[0], unit_input(rows[u][1], rows[u][2]))
+                     for u in ids]
+            s = sc.score(pairs, rc["qwen3_batch_tokens"])
+            if np.isnan(s).any():
+                raise RuntimeError(f"qid {q}: {int(np.isnan(s).sum())}/{len(s)} điểm NaN (fp16 tràn số)")
+            npairs += len(pairs)
+            out.append(pd.DataFrame({"qid": q, "unit_id": ids, "doc_id": g["doc_id"].values,
+                                     "rank": g["rank"].values, "score": s}))
+            if (n + 1) % 10 == 0 or n == 0:
+                dt = time.time() - t0
+                log(f"  {n + 1} câu hỏi, {dt / (n + 1):.2f}s/câu, {1000 * dt / npairs:.1f}ms/cặp")
+        if npairs:
+            dt = time.time() - t0
+            log(f"  xong {n + 1} câu hỏi, {npairs} cặp: {dt / (n + 1):.2f}s/câu, {1000 * dt / npairs:.1f}ms/cặp")
     else:
         sc = CrossScorer(rc["cross_model"], device, True, rc["doc_max_length"])
         for n, (q, g) in enumerate(df.groupby("qid", sort=True)):
@@ -153,7 +227,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--run", required=True)
-    ap.add_argument("--method", default=None, choices=[None, "colbert", "cross"])
+    ap.add_argument("--method", default=None, choices=[None, "colbert", "cross", "qwen3", "qwen3i"])
     ap.add_argument("--top-n", type=int, default=None)
     ap.add_argument("--shard", default="0/1", help="i/N theo câu hỏi (mỗi GPU một phần)")
     ap.add_argument("--device", default="cuda:0")
