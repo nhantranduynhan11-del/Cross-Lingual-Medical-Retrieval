@@ -88,6 +88,8 @@ def read_qids(spec):
     eval/judge/queries.csv của bộ nhãn). Rỗng → None (mọi câu hỏi)."""
     if not spec:
         return None
+    if str(spec).replace(",", "").strip().isdigit():       # danh sách dài vượt giới hạn tên file → không gọi Path.exists
+        return {int(x) for x in str(spec).split(",") if x.strip()}
     p = Path(spec)
     if not p.exists():
         return {int(x) for x in str(spec).split(",") if x.strip()}
