@@ -27,7 +27,13 @@ from .encode import unit_input
 
 def unit_rows(cfg, unit_ids, level="parents"):
     """{unit_id: (lang, ctx, text)} cho các đơn vị cần (đọc lọc theo id, không nạp cả kho)."""
-    d = ds.dataset(str(cfg.path("chunks") / level))
+    chunk_dir = cfg.path("chunks") / level
+    if not chunk_dir.exists():
+        import glob
+        hits = sorted(glob.glob(f"/kaggle/input/**/chunks/{level}", recursive=True))
+        if hits:
+            chunk_dir = Path(hits[0])
+    d = ds.dataset(str(chunk_dir))
     t = d.to_table(columns=["unit_id", "lang", "ctx", "text"], filter=ds.field("unit_id").isin(list(set(unit_ids))))
     x = t.to_pydict()
     return {u: (lg, c, tx) for u, lg, c, tx in zip(x["unit_id"], x["lang"], x["ctx"], x["text"])}
@@ -36,8 +42,18 @@ def unit_rows(cfg, unit_ids, level="parents"):
 def query_texts(cfg):
     """{lang: {qid: câu hỏi}} từ qtrans/queries_*.parquet."""
     out = {}
+    qdir = cfg.path("qtrans")
+    if not (qdir / "queries_vi.parquet").exists():
+        import glob
+        hits = sorted(glob.glob("/kaggle/input/**/queries_vi.parquet", recursive=True))
+        if hits:
+            qdir = Path(hits[0]).parent
+        else:
+            hits_work = sorted(glob.glob("/kaggle/working/**/queries_vi.parquet", recursive=True))
+            if hits_work:
+                qdir = Path(hits_work[0]).parent
     for lg in ("vi", "en", "zh"):
-        p = cfg.path("qtrans") / f"queries_{lg}.parquet"
+        p = qdir / f"queries_{lg}.parquet"
         if p.exists():
             t = ds.dataset(str(p)).to_table().to_pydict()
             out[lg] = dict(zip([int(x) for x in t["id"]], t["query"]))

@@ -133,11 +133,23 @@ def main():
     max_k = a.max_k or sc.get("auto_k_max", 400)
     r_total = a.r_total or sc.get("auto_k_r", 10.0)
 
-    qids = [int(x) for x in pq.read_table(cfg.path("queries"), columns=["id"]).column("id").to_pylist()]
+    qp = cfg.path("queries")
+    if not qp.exists():
+        import glob
+        hits = sorted(glob.glob("/kaggle/input/**/query.parquet", recursive=True))
+        if hits:
+            qp = Path(hits[0])
+    qids = [int(x) for x in pq.read_table(qp, columns=["id"]).column("id").to_pylist()]
     run = runs.read(a.run, depth=max((max_k if auto_k else k_doc) * 3, k_chunk + 100))
     ids = run[run["rank"] <= k_chunk + 100]["unit_id"].unique().tolist()
     texts = {u: r[2] for u, r in unit_rows(cfg, ids).items()}
-    link_ids = set(pq.read_table(cfg.path("links"), columns=["id"]).column("id").to_pylist())
+    lp = cfg.path("links")
+    if not lp.exists():
+        import glob
+        hits = sorted(glob.glob("/kaggle/input/**/links_corpus_vi_en_zh.parquet", recursive=True))
+        if hits:
+            lp = Path(hits[0])
+    link_ids = set(pq.read_table(lp, columns=["id"]).column("id").to_pylist())
     name = a.name or Path(a.run).stem
     out_dir = cfg.path("submissions")
     while True:
