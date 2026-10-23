@@ -246,7 +246,7 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                         "MAX_PER_DOC = [0]                    # tối đa n đoạn mỗi tài liệu trong 185 đoạn; [0] = không giới hạn; "
                         "[1, 2] = 2 bài nộp _mpd1, _mpd2\n"
                         "CHUNK_PROBS = ''                     # phân bổ lại ngân sách đoạn theo P(yes): tên run Qwen3 trong "
-                        "Input (vd 'lin07_qwen3i') → bài nộp _cbud; '' = tắt\n"
+                        "Input (vd 'lin07_qwen3i') → thêm bài nộp _cbud; '' = tắt\n"
                         "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)",
                "('chunks', 'qtrans')"),
     code('''
@@ -298,8 +298,9 @@ if CHUNK_PROBS:
     CPARG = f" --chunk-probs {h[0] / 'runs' / (CHUNK_PROBS + '.parquet')}"
 for name in ([] if QIDS else [RUN] * SUBMIT_RUN + NAMES[1:] + [f'{RUN}_{m}' for m in METHODS]):
     for mpd in MAX_PER_DOC:
-        sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} --k-chunk {K_CHUNK} '
-           f'--doc-agg {DOC_AGG} --max-per-doc {mpd}{CPARG}')
+        for cp in sorted({'', CPARG}):                    # CHUNK_PROBS → cả bài thường (185 đoạn) lẫn bài _cbud
+            sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} '
+               f'--k-chunk {K_CHUNK} --doc-agg {DOC_AGG} --max-per-doc {mpd}{cp}')
 report('k5')
 '''),
 ])
