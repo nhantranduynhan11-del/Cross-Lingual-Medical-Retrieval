@@ -59,14 +59,35 @@ def build_dense(cfg, level, emb=None, force=False, log=print):
     out.mkdir(parents=True, exist_ok=True)
     fidx = out / f"dense_{level}.faiss"
     if fidx.exists() and not force:
-        log(f"{fidx} đã có → bỏ qua (--force để dựng lại)")
-        return
+        try:
+            existing_idx = faiss.read_index(str(fidx))
+            if existing_idx.ntotal == 0:
+                log(f"[CẢNH BÁO] {fidx} đã có nhưng rỗng (0 vector) → tự động dựng lại!")
+            else:
+                log(f"{fidx} đã có ({existing_idx.ntotal:,} vector) → bỏ qua (--force để dựng lại)")
+                return
+        except Exception:
+            pass
     blocks = done_blocks(emb_dirs(cfg, emb), level)
     if not blocks:
         raise SystemExit(f"Không có khối emb mức {level} trong {emb_dirs(cfg, emb)}")
-    cur = current_pairs(cfg.path("chunks") / level)
+    chunk_dir = cfg.path("chunks") / level
+    cur = current_pairs(chunk_dir)
+    if not cur:
+        import glob
+        hits = sorted(glob.glob(f"/kaggle/input/**/chunks/{level}/part-*.parquet", recursive=True))
+        if hits:
+            fallback_dir = Path(hits[0]).parent
+            log(f"  [Tự động định vị] Không thấy chunks trong {chunk_dir}, tự động dùng {fallback_dir}")
+            cur = current_pairs(fallback_dir)
+    if not cur:
+        raise RuntimeError(f"LỖI: Không tìm thấy bất kỳ file chunks nào trong {chunk_dir}! "
+                           f"Hãy chắc chắn dataset mir2-chunks đã được Add Input vào Kaggle.")
     sel, taken = _selection(blocks, cur)
     total = sum(len(r) for _, r, _ in sel)
+    if total == 0:
+        raise RuntimeError(f"LỖI: Không có vector nào khớp với chunks mức {level}! "
+                           f"Đã tìm thấy {len(cur)} chunks, nhưng 0 vector khớp hash.")
     missing = len(cur) - len(taken)
     if missing:
         log(f"[CẢNH BÁO] {missing:,}/{len(cur):,} đơn vị {level} chưa có vector (chưa mã hoá hoặc đã đổi nội dung) → "
@@ -107,7 +128,12 @@ def build_dense(cfg, level, emb=None, force=False, log=print):
 def dense_search(cfg, level, qvecs, k):
     import faiss
     out = cfg.path("index")
-    index = faiss.read_index(str(out / f"dense_{level}.faiss"))
+    fidx = out / f"dense_{level}.faiss"
+    if not fidx.exists():
+        raise FileNotFoundError(f"Chưa có chỉ mục FAISS {fidx}!")
+    index = faiss.read_index(str(fidx))
+    if index.ntotal == 0:
+        raise RuntimeError(f"Chỉ mục FAISS {fidx} rỗng (0 vector)! Hãy chạy lại bước dựng index với --force.")
     try:
         faiss.extract_index_ivf(index).nprobe = cfg["index"]["dense"]["nprobe"]
     except Exception:

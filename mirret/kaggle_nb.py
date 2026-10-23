@@ -57,19 +57,22 @@ def write_config(src, dst, overrides):
 
 
 class Env:
-    def __init__(self, code, data, overrides):
+    def __init__(self, code, data, overrides, base_config=None):
         self.code, self.data, self.work = Path(code), Path(data), WORK
         self.cfg = WORK / "config.yaml"
+        self.base_cfg = Path(base_config) if base_config else self.code / "configs" / "retrieval.yaml"
+        if not self.base_cfg.is_absolute():
+            self.base_cfg = self.code / self.base_cfg
         self.overrides = {}
         self.set(overrides)
 
     def set(self, overrides):
         self.overrides.update(overrides or {})
-        write_config(self.code / "configs" / "retrieval.yaml", self.cfg, self.overrides)
+        write_config(self.base_cfg, self.cfg, self.overrides)
         print("cấu hình:", self.cfg, "| ghi đè:", json.dumps(self.overrides, ensure_ascii=False))
 
 
-def setup(nb_version, overrides=None, pip="pyvi jieba faiss-cpu", inputs=("chunks", "index", "qtrans", "runs")):
+def setup(nb_version, overrides=None, pip="pyvi jieba faiss-cpu", inputs=("chunks", "index", "qtrans", "runs"), base_config=None):
     """inputs: các thư mục kết quả của phiên/notebook trước cần đọc từ /kaggle/input (nếu có) — ghi vào cấu hình."""
     code = Path.cwd()
     print("NOTEBOOK", nb_version)
@@ -90,7 +93,7 @@ def setup(nb_version, overrides=None, pip="pyvi jieba faiss-cpu", inputs=("chunk
             ov[key] = str(hit / Path(probe).parts[0])
             print(f"  {name}: dùng {ov[key]} (output phiên trước)")
     ov.update(overrides or {})
-    env = Env(code, data, ov)
+    env = Env(code, data, ov, base_config=base_config)
     if pip and not LOCAL:
         sh(f"python -m pip install -q {pip}")
     gpu_info()
