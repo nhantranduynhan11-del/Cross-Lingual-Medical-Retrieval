@@ -30,9 +30,9 @@ def load_queries(path):
 
 
 def qencode(cfg, langs, device, log=print):
-    from .encode import M3Encoder, encode_texts, resolve_device
+    from .encode import encode_texts, load_encoder, resolve_device
     ec = cfg["encode"]
-    enc = M3Encoder.load(ec["model"], resolve_device(device), ec["fp16"], ec["max_length"])
+    enc = load_encoder(ec["model"], resolve_device(device), ec["fp16"], ec["max_length"])
     for lg in langs:
         p = queries_path(cfg, lg)
         if not p.exists():
@@ -85,8 +85,9 @@ def run_level(cfg, lang, method, level, depth, emb=None, allowed=None, log=print
     return df[df["rank"] <= depth].reset_index(drop=True)
 
 
-def run_all(cfg, langs, methods, emb=None, log=print):
+def run_all(cfg, langs, methods, emb=None, prefix=None, log=print):
     rc, rdir = cfg["retrieve"], cfg.path("runs")
+    rdir.mkdir(parents=True, exist_ok=True)
     depth = rc["depth"]
     allowed = {}                                           # LSR: chỉ vector khớp bản chunks hiện tại
     for method in methods:
@@ -107,6 +108,9 @@ def run_all(cfg, langs, methods, emb=None, log=print):
                 level_runs[level] = df
                 runs.write(df, rdir / f"{lang}_{method}@{level}.parquet",
                            {"lang": lang, "method": method, "level": level, "depth": depth})
+                if prefix:
+                    runs.write(df, rdir / f"{prefix}_{lang}_{method}@{level}.parquet",
+                               {"lang": lang, "method": method, "level": level, "depth": depth, "prefix": prefix})
             if not level_runs:
                 log(f"  {lang}_{method}: KHÔNG có mức nào chạy được")
                 continue
@@ -117,6 +121,12 @@ def run_all(cfg, langs, methods, emb=None, log=print):
             runs.write(br, rdir / f"{lang}_{method}.parquet",
                        {"lang": lang, "method": method, "levels": list(level_runs), "depth": depth,
                         "level_fusion": "rrf" if len(level_runs) > 1 else None})
+            if prefix:
+                tag = f"{prefix}_{lang}"
+                runs.write(br, rdir / f"{tag}.parquet",
+                           {"lang": lang, "method": method, "levels": list(level_runs), "depth": depth,
+                            "prefix": prefix, "level_fusion": "rrf" if len(level_runs) > 1 else None})
+                log(f"  → Đã lưu thêm alias: {rdir / f'{tag}.parquet'}")
             log(f"  {lang}_{method}: {br['qid'].nunique()} câu hỏi, mức {list(level_runs)}, {time.time() - t0:.0f}s")
 
 
@@ -128,6 +138,7 @@ def main():
     ap.add_argument("--langs", default=None)
     ap.add_argument("--methods", default=None)
     ap.add_argument("--emb", default=None, help="thư mục emb cho LSR (phẩy ngăn cách); mặc định <work>/emb")
+    ap.add_argument("--prefix", default=None, help="tiền tố tên run (vd e5 -> e5_vi.parquet)")
     ap.add_argument("--device", default="cuda:0")
     a = ap.parse_args()
     cfg = config.load(a.config)
@@ -138,7 +149,10 @@ def main():
     else:
         methods = a.methods.split(",") if a.methods else rc["methods"]
         emb = [Path(x) for x in a.emb.split(",")] if a.emb else None
-        run_all(cfg, langs, methods, emb)
+        prefix = a.prefix
+        if prefix is None and "e5" in str(cfg.get("encode", {}).get("model", "")).lower():
+            prefix = "e5"
+        run_all(cfg, langs, methods, emb, prefix=prefix)
 
 
 if __name__ == "__main__":

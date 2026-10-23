@@ -148,11 +148,49 @@ def with_tail(reranked, base, top_n):
     return allr.drop(columns="_o").reset_index(drop=True)
 
 
+def zscore_normalize(df, score_col="score"):
+    """Chuẩn hoá Z-score theo từng câu hỏi: z = (score - mean) / (std + 1e-9).
+    Nếu điểm nằm trong [0, 1] (xác suất P(yes) từ Qwen3):
+    chuyển sang logit: logit = ln((p + 1e-6) / (1 - p + 1e-6)) trước khi tính Z-score.
+    """
+    x = df.copy()
+    s = x[score_col].astype(float)
+    if (s >= 0.0).all() and (s <= 1.0).all() and s.max() <= 1.001 and s.min() >= -0.001:
+        eps = 1e-6
+        p = np.clip(s, eps, 1.0 - eps)
+        s = np.log(p / (1.0 - p))
+        x[score_col] = s
+    mean = x.groupby("qid")[score_col].transform("mean")
+    std = x.groupby("qid")[score_col].transform("std").fillna(1.0)
+    x["zscore"] = np.where(std > 1e-9, (x[score_col] - mean) / (std + 1e-9), 0.0)
+    return x
+
+
+def ensemble_runs(run_dfs, weights=None, depth=1000):
+    """Ensemble nhiều run rerank theo Z-score trung bình có trọng số."""
+    if not weights:
+        weights = [1.0] * len(run_dfs)
+    w_sum = sum(weights) if sum(weights) > 0 else 1.0
+    parts = []
+    for df, w in zip(run_dfs, weights):
+        norm = zscore_normalize(df)
+        norm["w_z"] = norm["zscore"] * w
+        parts.append(norm[["qid", "unit_id", "doc_id", "w_z", "rank"]])
+    all_df = pd.concat(parts, ignore_index=True)
+    merged = all_df.groupby(["qid", "unit_id", "doc_id"], as_index=False).agg(
+        total_z=("w_z", "sum"), best_rank=("rank", "min")
+    )
+    merged["score"] = merged["total_z"] / w_sum
+    merged = merged.sort_values(["qid", "score", "best_rank"], ascending=[True, False, True])
+    merged["rank"] = merged.groupby("qid").cumcount() + 1
+    return merged[merged["rank"] <= depth][["qid", "unit_id", "doc_id", "score", "rank"]].reset_index(drop=True)
+
+
 def main():
     config.stdout_utf8()
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
-    ap.add_argument("--run", required=True)
+    ap.add_argument("--run", default=None)
     ap.add_argument("--method", default=None, choices=[None, "colbert", "cross"])
     ap.add_argument("--top-n", type=int, default=None)
     ap.add_argument("--shard", default="0/1", help="i/N theo câu hỏi (mỗi GPU một phần)")
@@ -161,9 +199,29 @@ def main():
     ap.add_argument("--qids", default=None, help="chỉ các câu này: file qid (.txt/.csv/.parquet) hoặc '1,2,3'")
     ap.add_argument("--name", default=None, help="tên run kết quả (mặc định <run>_<method>, thêm _sub khi có --qids)")
     ap.add_argument("--force", action="store_true")
+    # Tùy chọn Ensemble Z-Score:
+    ap.add_argument("--ensemble", default=None, help="danh sách các run cần ensemble Z-score (phẩy ngăn cách)")
+    ap.add_argument("--weights", default=None, help="trọng số tương ứng cho --ensemble (phẩy ngăn cách)")
     a = ap.parse_args()
     cfg = config.load(a.config)
     rc = cfg["rerank"]
+
+    if a.ensemble:
+        run_paths = [Path(x.strip()) for x in a.ensemble.split(",") if x.strip()]
+        weights = [float(x.strip()) for x in a.weights.split(",")] if a.weights else [1.0] * len(run_paths)
+        assert len(run_paths) == len(weights), "Số lượng run và weights không khớp!"
+        run_dfs = [runs.read(p) for p in run_paths]
+        ens_df = ensemble_runs(run_dfs, weights, depth=cfg["retrieve"]["depth"])
+        out_dir = Path(a.out) if a.out else run_paths[0].parent
+        tag = a.name or f"ens_{'_'.join(p.stem for p in run_paths)}"
+        final = out_dir / f"{tag}.parquet"
+        runs.write(ens_df, final, {"ensemble": [str(p) for p in run_paths], "weights": weights, "method": "zscore"})
+        print(f"Ensemble {len(run_paths)} runs thành công → {final} ({ens_df['qid'].nunique()} câu hỏi)")
+        return
+
+    if not a.run:
+        ap.error("Cần truyền --run hoặc --ensemble")
+
     method = a.method or rc["method"]
     top_n = a.top_n or rc["top_n"]
     run_path = Path(a.run)

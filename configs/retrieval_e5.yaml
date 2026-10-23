@@ -82,6 +82,16 @@ fuse:
     rrf6: [vi_dense, vi_bm25, en_dense, en_bm25, zh_dense, zh_bm25]
     rrf_dense3: [vi_dense, en_dense, zh_dense]
     rrf_vi: [vi_dense, vi_bm25]
+    # Mở rộng Task C2 — Fusion 12 nhánh & Baseline lin07:
+    lin07:
+      dense: [vi_dense, en_dense, zh_dense]
+      sparse: [vi_bm25, vi_lsr, "en_bm25*0.5", "en_lsr*0.5", zh_bm25, zh_lsr]
+      alpha: 0.7
+    rrf12: [vi_dense, vi_lsr, vi_bm25, en_dense, en_lsr, en_bm25, zh_dense, zh_lsr, zh_bm25, e5_vi, e5_en, e5_zh]
+    lin12_07:
+      dense: [vi_dense, en_dense, zh_dense, e5_vi, "e5_en*0.5", e5_zh]
+      sparse: [vi_bm25, vi_lsr, "en_bm25*0.5", "en_lsr*0.5", zh_bm25, zh_lsr]
+      alpha: 0.7
 
 rerank:
   method: cross                          # cross-encoder bge-reranker-v2-m3
@@ -93,9 +103,13 @@ rerank:
   batch_tokens: 16384
 
 submit:
-  k_doc: 200                             # tốt nhất trên leaderboard cũ (d200)
+  k_doc: 200                             # mặc định (hoặc mức cơ sở)
   k_chunk: 185                           # tốt nhất cũ (c185); tự giảm nếu file nén vượt max_zip_mb
   max_zip_mb: 99
+  auto_k: false                          # bật True để kích hoạt dynamic cutoff K in [100, 400] theo E[F2]
+  auto_k_min: 100
+  auto_k_max: 400
+  auto_k_r: 10.0
   out_dir: "submissions"
 
 eval:

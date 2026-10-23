@@ -3,7 +3,7 @@
 **Nhánh Git:** `c-e5`  
 **Thành viên phụ trách:** Role C (Kaggle: `huyphong09`)  
 **Mục tiêu chính:** Triển khai Dense Retrieval với mô hình `intfloat/multilingual-e5-large` trên GPU độc lập T4 ×2, hoàn thành mốc đánh giá Go/No-Go trước 21/10/2026 và hoàn thành mã hoá trước 24/10/2026.
-
+Kế hoạch: https://claude.ai/artifact/KSmsvjrsipMogjb3B5SHBN
 ---
 
 ## 📌 TỔNG QUAN KẾT QUẢ MỐC GO / NO-GO (20/10/2026)
@@ -96,3 +96,43 @@
 
 ---
 *Báo cáo được cập nhật tự động vào ngày 23/10/2026 - Nhánh `c-e5` - Dự án ViBioMIR 2026.*
+---------------------
+Cập nhật cho ae baseline điểm cao nhất hiện tại của mình nha @All 
+Bước 1: Chunking
+Đoạn cha: 150–400 token BGE-M3 (đích 300), chia theo cấu trúc bài, không chồng lấn, là đơn vị nộp + dùng để rerank
+Đoạn con: ≤ 128 token, nằm trong đoạn cha; Chỉ để tìm mịn hơn. Điểm đoạn con được dồn về đoạn cha.
+Ngữ cảnh: Dòng “tiêu đề > mục”, ≤ 220 ký tự; ghép vào trước đoạn khi lập chỉ mục và khi rerank. Không nộp
+
+Bước 2: Dịch câu query: Câu query tiếng Việt được dịch sang tiếng anh và tiếng trung bằng Qwen2.5-14B (prompt t2, có bảng thuật ngữ y khoa)
+
+Bước 3: Truy hồi 9 nhánh: 
+Mỗi ngôn ngữ chạy 3 kiểu tìm, tổng 9 nhánh:
+Dense (BGE-M3, FAISS IVF-SQ8, nprobe 64): tìm ở cả đoạn cha và đoạn con. Tìm theo nghĩa, bắt được cách diễn đạt khác.
+LSR (trọng số từ thưa của BGE-M3): tìm ở cả đoạn cha và đoạn con. Giống tìm từ khoá nhưng có trọng số học được.
+BM25: chỉ trên đoạn cha. Khớp từ khoá chính xác, mạnh với tên thuốc, tên bệnh, viết tắt.
+
+Bước 4: Gộp tuyến tính thay cho RRF (linear với alpha = 0.7) gọi là lin07
+1. Với mỗi nhánh và mỗi câu hỏi, chuẩn hoá điểm min-max về [0, 1]. Đoạn cha lấy điểm cao nhất giữa mức cha và mức con.
+2. Điểm cuối = 0,7 × trung bình 3 nhánh dense + 0,3 × trung bình có trọng số 6 nhánh từ khoá. Hai nhánh en_lsr và en_bm25 có trọng số 0,5, giống rrf9_w.
+3. Kết quả là một danh sách đoạn cha xếp theo điểm.
+
+Bước 5: Rerank top-400 bằng 2 mô hình (bge vs qwen)
+Cả hai mô hình chấm cùng 400 đoạn cha đứng đầu lin07. Mỗi đoạn được chấm bằng câu hỏi cùng ngôn ngữ với nó (match_lang): đoạn zh chấm bằng câu hỏi zh, đoạn en bằng câu hỏi en.
+sau đó ens (ensemble) gộp lại:
+1. Với từng câu, trên đúng 400 đoạn đó, chuẩn hoá z-score điểm bge.
+2. Đổi P(yes) của Qwen3 sang logit trước rồi mới chuẩn hoá z-score. Lý do: xác suất dồn sát 1, chuẩn hoá trực tiếp sẽ mất khả năng phân biệt.
+3. Điểm ens = trung bình hai z-score.
+4. Các đoạn sau hạng 400 giữ nguyên thứ tự của lin07.
+
+Bước 6: Hai danh sách nộp, chọn riêng
+FINAL = (doc F2 + chunk F2) / 2. Hai danh sách được chấm độc lập, nên mỗi danh sách lấy từ nguồn tốt nhất cho nó.
+
+6a. Danh sách tài liệu: Qwen3i + cắt theo từng câu (autok400)
+dùng xác suất của mô hình Qwen3 để tự động quyết định: "Câu hỏi này nên nộp bao nhiêu tài liệu là lời nhất?"
+1. Gán mỗi tài liệu một xác suất đúng p = P(yes) cao nhất của các đoạn của nó trong top-400. Tài liệu ngoài top-400 có p = 0.
+2. Xếp các tài liệu từ cao xuống thấp theo xác suất p này
+3. Tìm điểm cắt k tốt nhất (autok): Máy tính sẽ thử chạy k từ 100 đến 400. Tại giá trị k nào mà con số EF_2 đạt đỉnh cao nhất thì dừng lại và lấy đúng k tài liệu đó để nộp trong đó EF_2 là kỳ vọng điểm F2
+
+6b. Danh sách đoạn: 185 đoạn cha theo thứ tự ens
+1. Lấy 185 đoạn cha đứng đầu theo điểm ens.
+2. Trong cùng một tài liệu, nếu có các đoạn văn nội dung gần giống hệt nhau thì bỏ bớt đi để không lãng phí lượt nộp

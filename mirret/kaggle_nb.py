@@ -89,11 +89,6 @@ def setup(nb_version, overrides=None, pip="pyvi jieba faiss-cpu", inputs=("chunk
         if hit is not None:
             ov[key] = str(hit / Path(probe).parts[0])
             print(f"  {name}: dùng {ov[key]} (output phiên trước)")
-        else:
-            in_dirs = [p.name for p in INPUT.iterdir() if p.is_dir()] if INPUT.exists() else []
-            print(f"  [CẢNH BÁO] Không tìm thấy '{name}' (probe '{probe}') trong {INPUT}!")
-            print(f"             Các dataset hiện có trong {INPUT}: {in_dirs}")
-            print(f"             -> Hãy bấm '+ Add Input' để thêm dataset chứa '{name}' (vd: mir2-{name})!")
     ov.update(overrides or {})
     env = Env(code, data, ov)
     if pip and not LOCAL:
