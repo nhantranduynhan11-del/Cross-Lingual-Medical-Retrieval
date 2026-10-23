@@ -21,8 +21,10 @@ def inspect_level(root_dir, level, expected_blocks, total_units, fp_expected=Non
     level_dir = Path(root_dir) / level
     if not level_dir.exists():
         return {
-            "level": level, "status": "MISSING", "total_blocks": 0, "expected_blocks": expected_blocks,
-            "missing_blocks": list(range(expected_blocks)), "valid_blocks": [], "tmp_cleaned": []
+            "level": level, "status": "MISSING", "valid_count": 0, "expected_blocks": expected_blocks,
+            "missing_blocks": list(range(expected_blocks)), "missing_count": expected_blocks,
+            "corrupted": [], "tmp_folders": [], "total_units_encoded": 0, "total_units_expected": total_units,
+            "completion_pct": 0.0, "size_gb": 0.0
         }
 
     valid = []

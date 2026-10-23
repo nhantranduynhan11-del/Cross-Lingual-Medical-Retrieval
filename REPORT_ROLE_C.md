@@ -64,24 +64,35 @@
   * *Giải pháp:* Cập nhật [mirret/kaggle_nb.py](file:///d:/BKAi/ViBioMIR/Cross-Lingual-Medical-Retrieval/mirret/kaggle_nb.py) bổ sung `os.chdir(KAGGLE)` trước khi xoá, truyền `cwd` tường minh cho `subprocess.Popen` và tiêm `PYTHONPATH` vào biến môi trường hệ thống.
 * **Khắc phục cảnh báo Hugging Face Hub (`HF_TOKEN`):**
   * Cung cấp tài liệu hướng dẫn về bản chất cảnh báo (chỉ là thông báo ưu tiên rate limit, model là public nên tải bình thường).
+* **Vượt rào cản giới hạn ổ đĩa 20 GB trên Kaggle (Task C1 Resume Pipeline):**
+  * *Vấn đề:* Tổng dung lượng embedding mE5 (Parents + Children) đạt 23.22 GB, vượt mức trần 20.0 GB của Kaggle Container, gây tràn ổ đĩa khi chạy đến khối 62/73.
+  * *Giải pháp:* Nâng cấp `mirret/encode.py` hỗ trợ cờ `--blocks`, phân bổ 20 khối còn thiếu cho 2 GPU song song và thu hồi output gọn nhẹ (~3.82 GB).
+  * *Kết quả:* Đã hợp nhất thành công 100% toàn bộ 121 khối (34 khối Parents + 87 khối Children, đủ 12.008.828 đơn vị văn bản).
 
 ---
 
-## 🚀 KẾ HOẠCH BƯỚC TIẾP THEO (GIAI ĐOẠN 20/10 - 24/10)
+## 🏆 KẾT QUẢ HOÀN THÀNH TASK C1 (23/10/2026)
 
-1. **Mã hoá toàn bộ kho Corpus (Task C1 Execution):**
-   * Đổi `RUN_PROFILE = False` ở Ô (1) của notebook.
-   * Kích hoạt chạy Ô (3) trên phiên GPU T4 ×2:
-     * Shard 0/2 trên GPU 0 (CUDA_VISIBLE_DEVICES=0).
-     * Shard 1/2 trên GPU 1 (CUDA_VISIBLE_DEVICES=1).
-   * Thực hiện qua cơ chế **Save Version $\rightarrow$ Save & Run All (Commit)** để tiến trình chạy ngầm trên đám mây của Kaggle qua đêm an toàn.
-2. **Đóng gói Dataset đầu ra `mir2-emb-e5`:**
-   * Sau khi chạy xong, kết quả lưu tại thư mục `/kaggle/working/emb_e5/`:
-     * `emb_e5/parents/<khối>/{dense.npy, ids.parquet, _DONE.json}`
-     * `emb_e5/children/<khối>/{dense.npy, ids.parquet, _DONE.json}`
-   * Tạo dataset Kaggle **`huyphong09/mir2-emb-e5`** làm đầu vào cho pha Lập chỉ mục Dense (`index_e5`) và Pha Reranking.
-3. **Phối hợp tích hợp:**
-   * Cung cấp các vector `mE5-large` để nhóm phối hợp hợp nhất (Fusion / RRF) với nhánh BM25 (Task A) và BGE-M3 (Task B).
+* **Tiến độ:** **100% HOÀN TẤT** *(vượt trước hạn chót 24/10/2026 1 ngày)*.
+* **Tổng số đơn vị mã hoá:** **12,008,828 đơn vị** (100% kho ViBioMIR).
+  * **Khối Parents:** 34 / 34 khối (3,332,632 đoạn cha) — 6.45 GB.
+  * **Khối Children:** 87 / 87 khối (8,676,196 đoạn con) — 16.77 GB.
+* **Tổng dung lượng bộ vector:** **23.22 GB**.
+* **Trạng thái xác thực:** Tất cả 121 khối đều có đủ `dense.npy`, `sparse.npz`, `ids.parquet`, `_DONE.json`.
 
 ---
-*Báo cáo được khởi tạo tự động và cập nhật trên nhánh `c-e5` - Dự án ViBioMIR 2026.*
+
+## 🚀 CÁC BƯỚC TIẾP THEO (TASK C2: LẬP CHỈ MỤC & TRUY HỒI)
+
+1. **Đóng gói & Đăng tải Dataset `huyphong09/mir2-emb-e5` lên Kaggle:**
+   * Sử dụng Kaggle API hoặc giao diện Web để tạo dataset từ thư mục `emb_e5` (hạn mức upload dataset 100 GB).
+2. **Lập chỉ mục Dense FAISS IVF-SQ8 (`index_e5`):**
+   * Dựng chỉ mục `dense_parents.faiss` và `dense_children.faiss` theo cấu hình `configs/retrieval_e5.yaml`.
+3. **Mã hoá câu hỏi & Chạy truy hồi (Dense Retrieval):**
+   * Mã hoá câu hỏi `query.parquet` (1.200 câu) bằng `mE5-large`.
+   * Chạy truy hồi trên FAISS index để sinh run `dense_e5`.
+4. **Hợp nhất đa mô hình (Multi-model Fusion):**
+   * Đóng góp run `dense_e5` vào hệ thống RRF cùng với BM25 (Role A) và BGE-M3 (Role B) để tối ưu điểm F2.
+
+---
+*Báo cáo được cập nhật tự động vào ngày 23/10/2026 - Nhánh `c-e5` - Dự án ViBioMIR 2026.*
