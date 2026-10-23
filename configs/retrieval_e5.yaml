@@ -40,9 +40,9 @@ index:
   out_dir: "index_e5"
   dense:
     flat_below: 200000                   # ít hơn → IndexFlatIP (chính xác); nhiều hơn → IVF + SQ8
-    nlist: 16384
+    nlist: 4096                          # tối ưu tốc độ và recall (chuẩn IVF cho 3M-8M vectors)
     nprobe: 64
-    train_size: 500000
+    train_size: 100000                   # 100k mẫu đủ chuẩn cho K-means 4096 cụm, train chỉ mất ~30s
 
 bm25:
   k1: 1.5

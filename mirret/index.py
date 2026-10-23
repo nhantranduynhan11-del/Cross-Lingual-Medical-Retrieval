@@ -53,7 +53,9 @@ def _selection(blocks, cur):
 
 
 def build_dense(cfg, level, emb=None, force=False, log=print):
+    import os
     import faiss
+    faiss.omp_set_num_threads(os.cpu_count() or 4)
     dc = cfg["index"]["dense"]
     out = cfg.path("index")
     out.mkdir(parents=True, exist_ok=True)
@@ -64,7 +66,7 @@ def build_dense(cfg, level, emb=None, force=False, log=print):
             if existing_idx.ntotal == 0:
                 log(f"[CẢNH BÁO] {fidx} đã có nhưng rỗng (0 vector) → tự động dựng lại!")
             else:
-                log(f"{fidx} đã có ({existing_idx.ntotal:,} vector) → bỏ qua (--force để dựng lại)")
+                log(f"{fidx} đã có ({existing_idx.ntotal:,} vector) → bỏ qua (đã hoàn thành)")
                 return
         except Exception:
             pass
@@ -113,10 +115,13 @@ def build_dense(cfg, level, emb=None, force=False, log=print):
         log(f"huấn luyện {kind} trên {len(x):,} vector: {time.time() - t0:.0f}s")
         del x
     ids = []
-    for b, rows, bid in sel:
+    t_add = time.time()
+    for idx, (b, rows, bid) in enumerate(sel):
         if len(rows):
             index.add(np.asarray(np.load(b / "dense.npy", mmap_mode="r")[rows], dtype=np.float32))
             ids += bid
+        if (idx + 1) % 10 == 0 or (idx + 1) == len(sel):
+            log(f"  đã nạp {idx + 1}/{len(sel)} khối ({len(ids):,} vector, {time.time() - t_add:.0f}s)")
     faiss.write_index(index, str(fidx))
     pq.write_table(pa.table({"unit_id": pa.array(ids, pa.string())}), out / f"dense_{level}_ids.parquet")
     (out / f"dense_{level}.json").write_text(json.dumps({"kind": kind, "n": index.ntotal, "dim": dim,
@@ -126,7 +131,9 @@ def build_dense(cfg, level, emb=None, force=False, log=print):
 
 
 def dense_search(cfg, level, qvecs, k):
+    import os
     import faiss
+    faiss.omp_set_num_threads(os.cpu_count() or 4)
     out = cfg.path("index")
     fidx = out / f"dense_{level}.faiss"
     if not fidx.exists():
