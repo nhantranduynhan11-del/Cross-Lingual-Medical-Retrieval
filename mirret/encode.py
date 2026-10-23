@@ -363,7 +363,25 @@ def write_block(out, ids, hs, dense, sparse, vocab, meta):
     tmp.rename(out)
 
 
-def run(enc, cfg, level, shard="0/1", skip=None, resume=None, log=print):
+def parse_blocks(s):
+    """Phân tích chuỗi đặc tả khối: '0,2,4' hoặc '62-86' hoặc '62..86' → set(int)."""
+    if not s:
+        return None
+    res = set()
+    for part in str(s).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part or ".." in part:
+            sep = ".." if ".." in part else "-"
+            lo, hi = part.split(sep, 1)
+            res.update(range(int(lo), int(hi) + 1))
+        else:
+            res.add(int(part))
+    return res
+
+
+def run(enc, cfg, level, shard="0/1", skip=None, resume=None, blocks=None, log=print):
     ec = cfg["encode"]
     chunk_dir = cfg.path("chunks") / level
     out_root = cfg.path("emb") / level
@@ -373,7 +391,8 @@ def run(enc, cfg, level, shard="0/1", skip=None, resume=None, log=print):
     size = ec["block"]
     n_blocks = -(-total // size)
     si, sn = (int(x) for x in shard.split("/"))
-    mine = [k for k in range(n_blocks) if k % sn == si]
+    target_blocks = parse_blocks(blocks)
+    mine = [k for k in range(n_blocks) if k % sn == si and (target_blocks is None or k in target_blocks)]
     log(f"[{level}] cần mã hoá {total:,} đơn vị (đã bỏ {len(skipset or ()):,} có sẵn) → {n_blocks} khối, "
         f"dấu vân tay {fp}; phần {shard}: {len(mine)} khối")
     prev = {b.name: b for b in done_blocks(resume, level)} if resume else {}
@@ -582,6 +601,7 @@ def main():
     ap.add_argument("--shard", default="0/1")
     ap.add_argument("--skip", default="", help="thư mục emb đã có (phẩy ngăn cách): chỉ mã hoá phần mới/đổi")
     ap.add_argument("--resume", default="", help="thư mục output phiên trước: chép khối đã xong")
+    ap.add_argument("--blocks", default="", help="Danh sách khối cần chạy (vd 62,64 hoặc 62-86), bỏ qua các khối khác")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--n", type=int, default=2000)
     ap.add_argument("--n-children", type=int, default=2000, help="Số mẫu children khi profile")
@@ -596,8 +616,11 @@ def main():
     resume = [x for x in a.resume.split(",") if x]
     if a.cmd == "plan":
         _, _, total, fp = plan(cfg.path("chunks") / a.level, encoded_pairs(skip, a.level) if skip else None)
+        n_blocks = -(-total // cfg["encode"]["block"])
+        target_blocks = parse_blocks(a.blocks)
+        blocks_to_run = [k for k in range(n_blocks) if target_blocks is None or k in target_blocks]
         print(json.dumps({"level": a.level, "units": total, "fp": fp,
-                          "blocks": -(-total // cfg["encode"]["block"])}, indent=1))
+                          "blocks": n_blocks, "selected_blocks": len(blocks_to_run)}, indent=1))
         return
     ec = cfg["encode"]
     model_name = a.model or ec["model"]
@@ -609,7 +632,7 @@ def main():
                 total_children=a.total_children, total_parents=a.total_parents,
                 quota_gpu_hours=a.quota, deadline=a.deadline)
     else:
-        run(enc, cfg, a.level, a.shard, skip, resume)
+        run(enc, cfg, a.level, a.shard, skip, resume, blocks=a.blocks)
 
 
 if __name__ == "__main__":
