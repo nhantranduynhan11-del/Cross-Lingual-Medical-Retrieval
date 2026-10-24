@@ -1,4 +1,4 @@
-"""Sinh các notebook Kaggle của pipeline truy hồi (notebooks/k1…k8). Chạy: python tools/make_notebooks.py"""
+"""Sinh các notebook Kaggle của pipeline truy hồi (notebooks/k1…k9). Chạy: python tools/make_notebooks.py"""
 import json
 from pathlib import Path
 
@@ -648,5 +648,112 @@ write_config(f'{CODE}/configs/retrieval.yaml', CFG, {'translate.out_dir': f'{DRI
 # (3) Kiểm tra nhanh: số lượt, lỗi JSON, 3 câu mẫu → tải records-*.jsonl trong Drive về
 !python -m mirret.query_expand show --config {CFG} --model {MODEL} --limit 3
 !ls -la {DRIVE}/work/qexp/rw3-qwen25_14b/
+'''),
+])
+
+# ---------------------------------------------------------------- k9: truy hồi có rewrite + thuật ngữ → rerank → bài nộp
+save("k9_qx_submit.ipynb", [
+    md("""
+# k9 — Truy hồi có rewrite + thuật ngữ (mir2-qx) → lin07 → rerank → bài nộp
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
+**Add Input:** `mir2-code` (bản có `retrieve qx`), `mir2-data`, `mir2-chunks`, `mir2-runs` (9 nhánh baseline + các mức
+`@parents/@children` + `qtrans/`), mọi `mir2-emb-m*`, **`mir2-qx`** (`qexp/rw`, `qexp/rwt`). Tuỳ chọn: output k4/k7 có
+`index/dense_*.faiss` (bỏ qua bước dựng chỉ mục dense, tiết kiệm 1–4,5 giờ); file `queries.csv` để thử trên bộ nhãn.
+
+Các nhánh có cờ bật được thay bằng nhánh `qx_*` (rewrite / thuật ngữ), các nhánh khác giữ baseline; gộp **lin07**
+(tuyến tính α = 0,7, en_lsr / en_bm25 × 0,5) → rerank `bge-reranker-v2-m3` top-400 → `mirret.submit`.
+**Thời gian:** chỉ mục dense 1–4,5 giờ (nếu chưa có) + mã hoá câu hỏi ~5 phút + truy hồi ~20–40 phút + rerank 1.200 câu
+~1–1,5 giờ. Thử trước trên bộ nhãn: `QIDS = 'queries.csv'` (rerank vài phút, không tạo bài nộp).
+**Đầu ra:** `submissions/<NAME>_cross.zip` (nộp leaderboard), `runs/qx_*`, `runs/<NAME>.parquet`, `runs/<NAME>_cross.parquet`.
+"""),
+    setup_cell("k9-v1", "USE_REWRITE_DENSE = True             # dense: [câu gốc, rewrite]\n"
+                        "USE_REWRITE_SPARSE = True            # LSR + rewrite; BM25 + rewrite\n"
+                        "USE_TERMS = True                     # LSR + 'rewrite ; thuật ngữ'; BM25 + thuật ngữ × W_TERMS\n"
+                        "W_TERMS, W_CAND = 0.5, 0.0           # W_CAND > 0: BM25 thêm chẩn đoán phỏng đoán (candidates)\n"
+                        "ALPHA = 0.7                          # lin07\n"
+                        "NAME = 'lin07qx'\n"
+                        "TOP_N = 400\nK_DOC, K_CHUNK = 200, 185\nDOC_AGG = 'max'\n"
+                        "QIDS = ''                            # '' = cả 1.200 câu (tạo bài nộp); 'queries.csv' = thử bộ nhãn\n"
+                        "SAVE_INDEX = False",
+               "('chunks', 'qtrans')"),
+    code('''
+# (2) Đầu vào: kết quả rewrite (mir2-qx), 9 nhánh baseline (mir2-runs), chỉ mục BM25, emb, chỉ mục dense có sẵn (nếu có)
+qxd = locate('qexp/rw/terms_vi.parquet') / 'qexp'
+shutil.copytree(qxd, f'{K.work}/qexp', dirs_exist_ok=True)
+print('rewrite + thuật ngữ:', qxd, open(qxd / 'rw' / 'meta.json', encoding='utf-8').read())
+base = (locate_all('runs/vi_dense.parquet') or [None])[0]
+assert base is not None, 'Add Input mir2-runs (output k4: 9 nhánh + các mức @parents/@children)'
+RUNS = f'{K.work}/runs'
+os.makedirs(RUNS, exist_ok=True)
+copied = []
+for f in glob.glob(f'{base}/runs/*.parquet') + glob.glob(f'{base}/runs/*.json'):
+    dst = f'{RUNS}/' + os.path.basename(f)
+    if not os.path.exists(dst):
+        shutil.copy(f, dst); copied.append(dst)
+print('nhánh baseline:', sorted(os.path.basename(f) for f in copied if f.endswith('.parquet') and '@' not in f))
+K.set({'retrieve.out_dir': RUNS, 'qexpand.use_rewrite_dense': USE_REWRITE_DENSE,
+       'qexpand.use_rewrite_sparse': USE_REWRITE_SPARSE, 'qexpand.use_terms': USE_TERMS,
+       'qexpand.w_terms': W_TERMS, 'qexpand.w_cand': W_CAND})
+bm = locate('index/bm25', required=False)
+if bm is not None:
+    K.set({'bm25.index_dir': str(bm / 'index' / 'bm25')})
+EMB = ','.join(sorted({str(d / 'emb') for d in locate_all('emb')}))
+print('emb:', EMB)
+os.makedirs(f'{K.work}/index', exist_ok=True)
+for d in locate_all('index/dense_parents.faiss'):            # chỉ mục dense có sẵn → liên kết, không dựng lại
+    for f in glob.glob(f'{d}/index/dense_*'):
+        dst = f'{K.work}/index/' + os.path.basename(f)
+        if not os.path.exists(dst):
+            os.symlink(f, dst); print('dùng chỉ mục có sẵn', f)
+if QIDS and not os.path.exists(QIDS) and not QIDS.replace(',', '').isdigit():
+    hits = sorted(glob.glob(f'{KAGGLE}/input/**/{QIDS}', recursive=True), key=len)
+    assert hits, f'Không thấy {QIDS} trong /kaggle/input'
+    QIDS = hits[0]
+QARG = f' --qids "{QIDS}"' if QIDS else ''
+print('câu hỏi rerank:', QIDS or 'cả 1.200 câu')
+'''),
+    code('''
+# (3) Chỉ mục dense (nếu cần và chưa có) + mã hoá câu hỏi: câu gốc, rewrite (rw), rewrite + thuật ngữ (rwt)
+need_dense = USE_REWRITE_DENSE
+for lv in ('parents', 'children'):
+    if need_dense and not os.path.exists(f'{K.work}/index/dense_{lv}.faiss'):
+        sh(f'python -m mirret.index dense --config {K.cfg} --level {lv} --emb {EMB}', f'dense_{lv}')
+sh(f'python -m mirret.retrieve qencode --config {K.cfg} --device cuda:0', 'qencode')
+if USE_REWRITE_DENSE or USE_REWRITE_SPARSE:
+    sh(f'python -m mirret.retrieve qencode --config {K.cfg} --device cuda:0 --variant rw', 'qencode_rw')
+if USE_TERMS:
+    sh(f'python -m mirret.retrieve qencode --config {K.cfg} --device cuda:0 --variant rwt', 'qencode_rwt')
+'''),
+    code('''
+# (4) Nhánh qx_* theo cờ → lin07 với nhánh qx thay nhánh baseline tương ứng
+sh(f'python -m mirret.retrieve qx --config {K.cfg} --emb {EMB}', 'retrieve_qx')
+import yaml
+lin = yaml.safe_load(open(K.cfg, encoding='utf-8'))['fuse']['configs']['lin07']['runs']
+items = []
+for it in lin:
+    n, _, w = str(it).partition('*')
+    items.append((f'qx_{n}' if os.path.exists(f'{RUNS}/qx_{n}.parquet') else n) + (f'*{w}' if w else ''))
+print('lin07qx =', items)
+sh(f'python -m mirret.fuse --config {K.cfg} --runs "{",".join(items)}" --linear {ALPHA} --name {NAME}', 'fuse')
+'''),
+    code('''
+# (5) Rerank bge-reranker-v2-m3 top-N trên 2 GPU (chia theo câu hỏi) rồi gộp
+par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.rerank --config {K.cfg} --run {RUNS}/{NAME}.parquet --method cross '
+     f'--top-n {TOP_N} --shard {g}/2 --device cuda:0{QARG}' for g in range(2)], 'rerank')
+sh(f'python -m mirret.rerank --config {K.cfg} --run {RUNS}/{NAME}.parquet --method cross --top-n {TOP_N} --shard 0/2{QARG}')
+'''),
+    code('''
+# (6) Bài nộp (chỉ khi chạy đủ 1.200 câu) → submissions/<NAME>_cross.zip; bỏ bản sao nhánh baseline khỏi output
+if not QIDS:
+    sh(f'python -m mirret.submit --config {K.cfg} --run {RUNS}/{NAME}_cross.parquet --k-doc {K_DOC} '
+       f'--k-chunk {K_CHUNK} --doc-agg {DOC_AGG}', 'submit')
+for f in copied:
+    os.remove(f)
+if not SAVE_INDEX:
+    for f in glob.glob(f'{K.work}/index/dense_*'):
+        os.remove(f)
+print('bài nộp:', sorted(glob.glob(f'{K.work}/submissions/*.zip')))
+report('k9')
 '''),
 ])

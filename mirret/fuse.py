@@ -3,6 +3,7 @@
   python -m mirret.fuse                         # mọi cấu hình trong fuse.configs (vd rrf9 = 9 nhánh)
   python -m mirret.fuse --only rrf9
   python -m mirret.fuse --runs vi_dense,zh_dense --name thu_nghiem
+  python -m mirret.fuse --runs qx_vi_dense,vi_lsr,…,"en_bm25*0.5" --linear 0.7 --name lin07qx   (tuyến tính, như lin07)
   python -m mirret.fuse --runs rrf9_w_cross,q2d9_cross --name rrf9w_q2d9_cross --union
         hợp các run ĐÃ rerank bằng CÙNG reranker (điểm so được): top-N đã rerank của mọi run xếp theo điểm reranker,
         rồi phần đuôi theo RRF — tương đương rerank tập ứng viên lớn hơn (hợp các top-N), không cần chạy lại GPU.
@@ -93,12 +94,15 @@ def main():
     ap.add_argument("--runs", default=None, help="danh sách run để gộp (tên file trong runs/, không đuôi)")
     ap.add_argument("--name", default=None)
     ap.add_argument("--union", action="store_true", help="--runs là các run đã rerank bằng cùng reranker → union_rerank")
+    ap.add_argument("--linear", type=float, default=None,
+                    help="--runs gộp tuyến tính theo điểm với α này (như lin07: --linear 0.7) thay cho RRF")
     a = ap.parse_args()
     cfg = config.load(a.config)
     fc = cfg["fuse"]
     rdir = cfg.path("runs")
     if a.runs:
-        configs = {a.name or "fused": a.runs.split(",")}
+        items = a.runs.split(",")
+        configs = {a.name or "fused": {"linear": a.linear, "runs": items} if a.linear is not None else items}
     else:
         configs = {n: v for n, v in fc["configs"].items() if not a.only or n in a.only.split(",")}
         unknown = [n for n in (a.only or "").split(",") if n and n not in fc["configs"]]
@@ -111,7 +115,7 @@ def main():
             miss = [r for r, _, df in scored if df is None]
             if miss:
                 print(f"  {name}: thiếu run {miss} → bỏ qua")
-                if a.only:
+                if a.only or a.runs:
                     raise SystemExit(f"thiếu run {miss} trong {rdir}")
                 continue
             df = linear(scored, alpha, fc["depth"])

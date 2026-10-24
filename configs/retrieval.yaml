@@ -87,6 +87,12 @@ qexpand:                                 # viết lại câu hỏi + thuật ng�
   w_terms: 0.5
   w_cand: 0.0                            # chẩn đoán có khả năng (candidates) — mặc định không dùng, bật trong ablation
   max_df_ratio: 0.05                     # bỏ token của thuật ngữ / candidates có df/n_docs lớn hơn (token câu gốc giữ nguyên)
+  # Truy hồi (python -m mirret.retrieve qx): mọi cờ tắt = không chạy gì; `retrieve run` (baseline) không bị ảnh hưởng
+  use_rewrite_dense: false               # dense: [câu gốc, rewrite] → gộp fuse_variants
+  use_rewrite_sparse: false              # LSR + phiên bản rewrite; BM25 + rewrite × w_rewrite
+  use_terms: false                       # LSR + phiên bản "rewrite ; thuật ngữ"; BM25 + thuật ngữ × w_terms
+  fuse_how: max                          # gộp phiên bản: max | mean (min-max theo câu trước khi gộp)
+  prefix: qx                             # runs/<prefix>_<lang>_<method>[@mức].parquet
 
 retrieve:
   langs: [vi, en, zh]                    # nhánh ngôn ngữ câu hỏi (vi = câu gốc)

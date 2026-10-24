@@ -79,6 +79,7 @@ dữ liệu: thêm `--dir-mode zip`. Với output notebook: tab *Output* → *Ne
 | `k6_eval` | CPU | code, data, chunks, runs, rerank (+ labels) | `MODE='pool'` → phiếu; `'extend'` → phiếu bổ sung; `'score'` → kappa, điểm, giá trị biên, bảng |
 | `k7_qexp` | GPU T4 ×2 | code, data, chunks, qtrans, runs, mọi emb, `queries.csv` | tài liệu giả Query2Doc / HyDE (Qwen2.5-14B) + bm25c → 9 nhánh biến thể → `q2d9`, `hyde9`, `q2dlex`, `bm25c9` → rerank trên bộ nhãn |
 | `k8_qx` | GPU T4 ×2 | code, data, chunks, qtrans (+ `mir2-qx` để chạy tiếp) | viết lại câu hỏi + thuật ngữ mở rộng (`mirret/query_expand.py`, Qwen2.5-14B) → `qexp/rw3-*/records*.jsonl`, `qexp/rw`, `qexp/rwt`; `SHARDS` chia việc với máy khác |
+| `k9_qx_submit` | GPU T4 ×2 | code, data, chunks, runs, mọi emb, `mir2-qx` | `retrieve qx` (nhánh có rewrite / thuật ngữ theo cờ) → lin07 với nhánh `qx_*` → rerank cross top-400 → `submissions/lin07qx_cross.zip`; `QIDS` để thử trên bộ nhãn |
 | `c8_qx_colab` (Colab) | 1 GPU (G4 96 GB: fp16, lô 32) | Drive: `mir2_code.zip`, `qtrans/queries_*.parquet` | như k8, chạy trên Google Colab (1.200 câu × 3 ngôn ngữ ~30 phút trên G4); kết quả ghi thẳng vào Drive, chạy tiếp được khi mất kết nối |
 
 Ô (1) của mọi notebook in `VERSION.txt` của `mir2-code` — kiểm tra đúng bản trước khi chạy dài.
