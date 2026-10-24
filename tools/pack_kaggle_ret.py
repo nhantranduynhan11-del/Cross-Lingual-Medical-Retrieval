@@ -47,14 +47,14 @@ def pack_code(user, out, config=None):
             if "__pycache__" not in p.parts:
                 files.append(p)
     cfg_src = Path(config) if config else ROOT / "configs" / "retrieval.yaml"
-    for p in files + [cfg_src] + sorted((ROOT / "configs").glob("*.tsv")):
+    for p in files + [cfg_src] + sorted((ROOT / "configs").glob("*.tsv")) + sorted((ROOT / "configs").glob("*.txt")):
         h.update(p.read_bytes())
     version = f"{datetime.datetime.now():%Y-%m-%d %H:%M} sha1 {h.hexdigest()[:10]}"
     with zipfile.ZipFile(out / "mir2_code.zip", "w", zipfile.ZIP_DEFLATED) as z:
         for p in files:
             z.write(p, p.relative_to(ROOT).as_posix())
         z.write(cfg_src, "configs/retrieval.yaml")
-        for extra in sorted((ROOT / "configs").glob("*.tsv")):          # bảng thuật ngữ dịch…
+        for extra in sorted((ROOT / "configs").glob("*.tsv")) + sorted((ROOT / "configs").glob("*.txt")):  # bảng thuật ngữ, userdict jieba
             z.write(extra, f"configs/{extra.name}")
         z.writestr("VERSION.txt", version + "\n")
     if user:

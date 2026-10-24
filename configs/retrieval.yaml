@@ -48,7 +48,12 @@ bm25:
   k1: 1.5
   b: 0.75
   levels: [parents]                      # đoạn con chứa đúng chữ của đoạn cha → BM25 trên đoạn cha là đủ (thêm children nếu muốn)
-  vi_tokenizer: pyvi                     # pyvi (tách từ ghép, chậm) | syllable (tách theo âm tiết, nhanh)
+  vi_tokenizer: pyvi                     # pyvi (tách từ ghép, chậm) | syllable (tách theo âm tiết, nhanh) | hybrid (từ ghép pyvi + âm tiết rời)
+  # Tuỳ chọn tách từ mới (mặc định tắt = chỉ mục cũ). Cấu hình ghi vào stats.json khi dựng, câu hỏi tự tách theo chỉ mục;
+  # bật tuỳ chọn nào thì phải dựng lại chỉ mục ngôn ngữ đó vào THƯ MỤC KHÁC (index_dir) — mirret.index chặn trộn cấu hình.
+  en_stem: false                         # tiếng Anh: Snowball stemming (cần snowballstemmer)
+  zh_t2s: false                          # tiếng Trung: phồn thể → giản thể trước khi tách (cần opencc)
+  zh_userdict: null                      # tiếng Trung: userdict cho jieba, vd configs/jieba_med_userdict.txt (tools/glossary_to_jieba.py)
   workers: 4
   index_dir: null                        # mặc định <index>/bm25; đặt đường dẫn để dùng chỉ mục BM25 dựng ở nơi khác
 

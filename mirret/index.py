@@ -144,8 +144,12 @@ def main():
     for lg in langs:
         d = bm25_dir(cfg, a.level, lg)
         if a.cmd in ("bm25-tokenize", "bm25"):
+            ud = bc.get("zh_userdict")
+            if ud and not Path(ud).is_absolute():
+                ud = config.ROOT / ud                     # đi kèm mã, như translate.glossary
             bm25.tokenize_parts(cfg.path("chunks") / a.level, d, lg, a.shard, bc["workers"], bc["vi_tokenizer"],
-                                a.force)
+                                a.force, en_stem=bc.get("en_stem", False), zh_t2s=bc.get("zh_t2s", False),
+                                zh_userdict=ud)
         if a.cmd in ("bm25-build", "bm25"):
             bm25.build(d, bc["k1"], bc["b"], a.force)
 

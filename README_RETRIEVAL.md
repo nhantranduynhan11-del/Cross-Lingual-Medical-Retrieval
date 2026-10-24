@@ -119,6 +119,7 @@ python -m mirret.submit --run runs/rrf9_w_cross.parquet --verify-corpus
 | `bm25.{k1,b}` | 1,5 / 0,75 | BM25 Lucene, thống kê toàn cục |
 | `translate.use` | `qwen25_14b` | bản dịch cho nhánh en/zh (chọn sau khi chấm) |
 | `retrieve.{levels,depth}` | parents + children / 1000 | mức tìm, độ sâu mỗi nhánh |
+| `bm25.{vi_tokenizer,en_stem,zh_t2s,zh_userdict}` | pyvi / false / false / null | tách từ (`hybrid` = từ ghép + âm tiết; Snowball; OpenCC t2s; userdict jieba từ `tools/glossary_to_jieba.py`); ghi vào `stats.json`, câu hỏi tách theo chỉ mục — tuỳ chọn mới cần dựng vào `bm25.index_dir` khác |
 | `fuse.rrf_k`, `fuse.configs` | 60 / **rrf9_w** (baseline), rrf9, rrf_vi, rrf_dense3 | gộp RRF |
 | `rerank.{method,top_n,match_lang}` | **cross** / 400 / true | Stage 2 |
 | `submit.{k_doc,k_chunk,max_zip_mb}` | 200 / 185 / 99 | bài nộp |
