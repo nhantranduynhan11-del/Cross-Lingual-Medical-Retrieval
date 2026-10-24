@@ -1,4 +1,4 @@
-"""Sinh các notebook Kaggle của pipeline truy hồi (notebooks/k1…k6). Chạy: python tools/make_notebooks.py"""
+"""Sinh các notebook Kaggle của pipeline truy hồi (notebooks/k1…k8). Chạy: python tools/make_notebooks.py"""
 import json
 from pathlib import Path
 
@@ -529,5 +529,124 @@ if not SAVE_INDEX:
         os.remove(f)
 print('run gửi chấm:', sorted(os.path.basename(f) for f in glob.glob(f'{RUNS}/*_cross*.parquet')))
 report('k7')
+'''),
+])
+
+# ---------------------------------------------------------------- k8: viết lại câu hỏi + thuật ngữ (query_expand)
+save("k8_qx.ipynb", [
+    md("""
+# k8 — Viết lại câu hỏi + thuật ngữ mở rộng (mirret/query_expand.py)
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
+**Add Input:** `mir2-code` (bản mới có `mirret/query_expand.py`), `mir2-data`, `mir2-chunks` (chỉ mục BM25 — cho ô (5)),
+dataset có `qtrans/queries_{vi,en,zh}.parquet` (output k4 `mir2-runs` hoặc `mir2-qtrans`), dataset có file câu hỏi
+`80queries.csv`; thêm output k8 phiên trước (`mir2-qx`) nếu chạy tiếp — lượt đã có trong cache không sinh lại.
+
+Qwen2.5-14B (4-bit) sinh cho mỗi câu × {vi, en, zh} một JSON `{"rewrite", "terms"}` (greedy). vi = câu gốc, en/zh =
+bản dịch t2 (cùng bản baseline). Gợi ý thuật ngữ từ `configs/med_glossary_vi.tsv`.
+**Thử 5 câu** (mặc định): `LIMIT = 5` → 15 lượt, 1 GPU, ~10 phút kể cả nạp mô hình.
+**Đủ 80 câu / 1.200 câu:** `LIMIT = 0` (+ `QIDS = ''` cho 1.200 câu) → 2 GPU song song; ô (3) in s/lượt.
+**Chia việc với máy khác** (vd Colab, notebook `c8_qx_colab.ipynb`): `SHARDS = ['0/3', '1/3']` (mỗi GPU một phần), máy kia
+chạy `2/3`; mỗi phần ghi `records-<i>of<N>.jsonl` riêng, `build` gộp mọi file.
+**Đầu ra:** `qexp/rw3-qwen25_14b/records*.jsonl` (cache theo phiên bản prompt, có đầu ra thô), `qexp/rw/`, `qexp/rwt/` → dataset **`mir2-qx`**.
+"""),
+    setup_cell("k8-v4", "MODEL = 'qwen25_14b'\n"
+                        "QIDS = '80queries.csv'               # '' = cả 1.200 câu\n"
+                        "LIMIT = 5                            # >0: chỉ N câu đầu (thử); 0 = mọi câu trong QIDS\n"
+                        "SHARDS = []                          # vd ['0/3', '1/3']: mỗi GPU một phần (phần 2/3 chạy ở máy khác)\n"
+                        "BATCH, QUANT = 8, '4bit'\n"
+                        "QID_EXPLAIN = None                   # câu in token + trọng số BM25 (None = câu nhỏ nhất)",
+               "('qtrans',)"),
+    code('''
+# (2) Đầu vào: file câu hỏi, chỉ mục BM25, cache phiên trước; bản dịch đang dùng
+if QIDS and not os.path.exists(QIDS) and not QIDS.replace(',', '').isdigit():
+    nrow = lambda h: sum(1 for _ in open(h, encoding='utf-8-sig')) - 1
+    hits = sorted(glob.glob(f'{KAGGLE}/input/**/{QIDS}', recursive=True), key=lambda h: (-nrow(h), len(h)))
+    assert hits, f'Không thấy {QIDS} trong /kaggle/input (Add Input dataset chứa file này)'
+    print('các file', QIDS, 'trong input:', [(h, nrow(h)) for h in hits])
+    QIDS = hits[0]
+QARG = f' --qids "{QIDS}"' if QIDS else ''
+qt = locate('qtrans/queries_vi.parquet') / 'qtrans'
+print('câu hỏi:', QIDS or 'cả 1.200 câu', '| bản dịch:', qt,
+      open(qt / 'queries_meta.json', encoding='utf-8').read() if (qt / 'queries_meta.json').exists() else '')
+bm = locate('index/bm25', required=False)
+if bm is not None:
+    K.set({'bm25.index_dir': str(bm / 'index' / 'bm25')})
+else:
+    print('[chú ý] không thấy index/bm25 (mir2-chunks) → ô (5) sẽ báo thiếu chỉ mục')
+for d in locate_all('qexp'):                          # cache phiên trước → chỉ sinh phần còn thiếu
+    for f in glob.glob(f'{d}/qexp/rw*-*/records*.jsonl'):
+        dst = f'{K.work}/qexp/' + os.path.relpath(f, f'{d}/qexp')
+        if not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy(f, dst); print('chép', f)
+sh('python -m pip install -q -U bitsandbytes accelerate')
+'''),
+    code('''
+# (3) Sinh rewrite + thuật ngữ (Qwen2.5-14B 4-bit). SHARDS: mỗi GPU một phần; thử ít câu: 1 GPU; còn lại: mỗi GPU một nửa
+lim = f' --limit {LIMIT}' if LIMIT else ''
+gen = f'python -m mirret.query_expand generate --config {K.cfg} --model {MODEL} --batch {BATCH} --quant {QUANT}{QARG}{lim}'
+if SHARDS:
+    par([f'CUDA_VISIBLE_DEVICES={g} {gen} --shard {s}' for g, s in enumerate(SHARDS)], 'qx_generate')
+elif LIMIT and LIMIT <= 40:
+    sh(f'CUDA_VISIBLE_DEVICES=0 {gen}', 'qx_generate')
+else:
+    par([f'CUDA_VISIBLE_DEVICES={g} {gen} --shard {g}/2' for g in range(2)], 'qx_generate')
+'''),
+    code('''
+# (4) Dựng câu hỏi biến thể (qexp/rw, qexp/rwt) + in đầu ra 3 ngôn ngữ, số lượt lỗi JSON
+sh(f'python -m mirret.query_expand build --config {K.cfg} --model {MODEL}')
+sh(f'python -m mirret.query_expand show --config {K.cfg} --model {MODEL} --limit {LIMIT or 5}')
+'''),
+    code('''
+# (5) Một câu: token + trọng số BM25 trước / sau mở rộng (w_base, w_rewrite, w_terms, max_df_ratio trong qexpand)
+qa = f' --qid {QID_EXPLAIN}' if QID_EXPLAIN is not None else ''
+sh(f'python -m mirret.query_expand explain --config {K.cfg}{qa}', check=False)
+report('k8')
+print('→ Save Version, tạo dataset mir2-qx từ output (qexp/)')
+'''),
+])
+
+# ---------------------------------------------------------------- c8: phần câu hỏi của k8 chạy trên Google Colab
+save("c8_qx_colab.ipynb", [
+    md("""
+# c8 — Viết lại câu hỏi + thuật ngữ trên Google Colab (một phần của k8)
+
+**Runtime → Change runtime type → T4 GPU.** Mỗi phiên Colab 1 GPU → chạy một phần (`SHARD`), các phần khác ở Kaggle
+(k8, `SHARDS = ['0/3', '1/3']`).
+**Chuẩn bị trên Google Drive** thư mục `MyDrive/mir2/`:
+- `mir2_code.zip` (CÙNG bản với Kaggle — ô (1) in VERSION để đối chiếu);
+- `qtrans/queries_vi.parquet`, `queries_en.parquet`, `queries_zh.parquet` (tải từ dataset `mir2-runs`, thư mục `qtrans/`).
+
+Kết quả ghi thẳng vào Drive: `MyDrive/mir2/work/qexp/rw3-qwen25_14b/records.jsonl`, nối sau MỖI lô → mất kết
+nối thì chạy lại mọi ô, lượt đã có được bỏ qua. Xong: tải file đó về.
+"""),
+    code('''
+# (1) Chuẩn bị. Chỉ sửa các biến viết HOA.
+SHARD = '0/1'                                  # cả 1.200 câu; chia với Kaggle: '2/3' (k8 chạy 0/3, 1/3)
+MODEL, BATCH, QUANT = 'qwen25_14b', 32, 'fp16'  # GPU 96 GB (G4); T4: 8, '4bit'
+DRIVE = '/content/drive/MyDrive/mir2'
+import os, shutil, sys, zipfile
+from google.colab import drive
+drive.mount('/content/drive')
+CODE, CFG = '/content/code', '/content/config.yaml'
+shutil.rmtree(CODE, ignore_errors=True)
+zipfile.ZipFile(f'{DRIVE}/mir2_code.zip').extractall(CODE)
+print('mir2-code', open(f'{CODE}/VERSION.txt', encoding='utf-8').read().strip())
+miss = [lg for lg in ('vi', 'en', 'zh') if not os.path.exists(f'{DRIVE}/qtrans/queries_{lg}.parquet')]
+assert not miss, f'Thiếu {DRIVE}/qtrans/queries_{miss}.parquet'
+os.chdir(CODE); sys.path.insert(0, CODE)
+from mirret.kaggle_nb import write_config
+write_config(f'{CODE}/configs/retrieval.yaml', CFG, {'translate.out_dir': f'{DRIVE}/qtrans', 'paths.work_dir': f'{DRIVE}/work'})
+!nvidia-smi --query-gpu=name,memory.total --format=csv
+!pip install -q -U bitsandbytes accelerate
+'''),
+    code('''
+# (2) Sinh: G4 fp16 ước ~20–50 phút cho 1.200 câu × 3 ngôn ngữ (T4 4-bit: ~4 s/lượt), chưa kể ~10 phút tải + nạp mô hình
+!python -m mirret.query_expand generate --config {CFG} --model {MODEL} --shard {SHARD} --batch {BATCH} --quant {QUANT}
+'''),
+    code('''
+# (3) Kiểm tra nhanh: số lượt, lỗi JSON, 3 câu mẫu → tải records-*.jsonl trong Drive về
+!python -m mirret.query_expand show --config {CFG} --model {MODEL} --limit 3
+!ls -la {DRIVE}/work/qexp/rw3-qwen25_14b/
 '''),
 ])

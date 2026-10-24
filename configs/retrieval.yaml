@@ -79,6 +79,20 @@ retrieve:
   methods: [dense, lsr, bm25]            # 3 × 3 = 9 nhánh
   levels: [parents, children]            # dense/LSR tìm ở cả hai mức; điểm đoạn con dồn về đoạn cha (RRF trong nhánh)
   depth: 1000                            # số đoạn cha mỗi nhánh
+qexpand:                                 # viết lại câu hỏi + thuật ngữ mở rộng (mirret/query_expand.py)
+  model: qwen25_14b                      # tên trong translate.models; lượng tử theo translate.quant
+  max_new_tokens: 320                    # JSON rewrite (≤ 40–60 từ) + ≤ 8 thuật ngữ + ≤ 3 candidates
+  batch: 8
+  repetition_penalty: 1.0                # TẮT: phạt lặp phạt cả token của prompt → terms tiếng Việt hỏng (bản rw2: 1.05)
+  glossary_max: 10                       # số mục bảng thuật ngữ tối đa đưa vào prompt
+  glossary_terms: true                   # build: tự thêm tên đã kiểm chứng (bảng thuật ngữ) vào terms khi câu gốc khớp
+  name: rw                               # qexp/rw (rewrite), qexp/rwt (rewrite + thuật ngữ)
+  w_base: 1.0                            # BM25 có trọng số (WeightedQueryEncoder)
+  w_rewrite: 1.0
+  w_terms: 0.5
+  w_cand: 0.0                            # chẩn đoán có khả năng (candidates) — mặc định không dùng, bật trong ablation
+  max_df_ratio: 0.05                     # bỏ token của thuật ngữ / candidates có df/n_docs lớn hơn (token câu gốc giữ nguyên)
+
   query_batch: 64
   out_dir: "runs"
 

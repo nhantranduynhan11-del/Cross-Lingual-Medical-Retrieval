@@ -164,7 +164,6 @@ def load_records(cfg, mode, model_key, ok_only=True):
 def generate(cfg, mode, model=None, langs=LANGS, qids=None, shard="0/1", limit=0, batch=None, quant=None, log=print):
     import os
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-    import torch
     xc = cfg["expand"]
     model = model or xc["model"]
     mid, mkey = translate.model_id(cfg, model), translate.model_key(cfg, model)
@@ -190,22 +189,44 @@ def generate(cfg, mode, model=None, langs=LANGS, qids=None, shard="0/1", limit=0
     if not todo:
         return
     tok, llm = translate.load_llm(mid, quant or cfg["translate"].get("quant"), log)
-    max_new = int(xc["max_new_tokens"])
+
+    def record(item, raw, sample, sec):
+        q, lg, t = item
+        doc = clean(raw)
+        ok, why = check(doc, lg, mode)
+        return {"id": q, "lang": lg, "mode": mode, "query": t, "doc": doc, "ok": ok, "why": why, "raw": raw,
+                "model": mid, "sampled": sample, "sec": round(sec, 2)}
+
+    generate_loop(tok, llm, todo, out, lambda x: chat(tok, mode, x[1], x[2]), record, int(batch or xc["batch"]),
+                  int(xc["max_new_tokens"]), tried=tried, retry_sample=True, log=log)
+
+
+def generate_loop(tok, llm, todo, out, prompt, record, batch, max_new, tried=(), retry_sample=True,
+                  repetition_penalty=1.05, log=print):
+    """Sinh theo lô cho các mục todo = [(qid, lang, câu hỏi)], ghi nối từng bản ghi vào out (jsonl) ngay sau mỗi lô.
+    prompt(mục) → chuỗi đầu vào; record(mục, đầu ra thô, có lấy mẫu?, s/lượt) → bản ghi (có khoá "ok").
+    Sinh tất định (greedy); retry_sample: lượt 2 lấy mẫu lại cho mục hỏng (cả mục hỏng ở phiên trước, tập tried).
+    repetition_penalty (lượt greedy; 1.0 = tắt): transformers phạt cả token của PROMPT — hợp với đoạn văn dài (q2d/HyDE,
+    chống lặp câu), hại khi cần chép lại từ của câu hỏi (query_expand).
+    Hết bộ nhớ GPU → giảm lô một nửa. Dùng chung cho expand (q2d/HyDE) và query_expand (rewrite + thuật ngữ)."""
+    import torch
+    greedy = {"do_sample": False}
+    if repetition_penalty and repetition_penalty != 1.0:
+        greedy["repetition_penalty"] = repetition_penalty
 
     def gen(group, sample):
-        enc = tok([chat(tok, mode, lg, t) for _, lg, t in group], return_tensors="pt", padding=True).to(llm.device)
+        enc = tok([prompt(x) for x in group], return_tensors="pt", padding=True).to(llm.device)
         with torch.no_grad():
             g = llm.generate(**enc, max_new_tokens=max_new, pad_token_id=tok.pad_token_id,
-                             **({"do_sample": True, "temperature": 0.7, "top_p": 0.9} if sample
-                                else {"do_sample": False, "repetition_penalty": 1.05}))
+                             **({"do_sample": True, "temperature": 0.7, "top_p": 0.9} if sample else greedy))
         return tok.batch_decode(g[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
 
-    log(f"  prompt mẫu ~{len(tok(chat(tok, mode, todo[0][1], todo[0][2]))['input_ids'])} token, "
-        f"tối đa {max_new} token sinh")
-    t0, n_ok, n_done, bs = time.time(), 0, 0, int(batch or xc["batch"])
+    log(f"  prompt mẫu ~{len(tok(prompt(todo[0]))['input_ids'])} token, tối đa {max_new} token sinh")
+    t0, n_ok, n_done, bs = time.time(), 0, 0, batch
     failed_now = []
-    passes = [([x for x in todo if (x[0], x[1]) not in tried], False),
-              (lambda: [x for x in todo if (x[0], x[1]) in tried] + failed_now, True)]   # lượt 2: lấy mẫu cho câu hỏng
+    passes = [([x for x in todo if (x[0], x[1]) not in tried], False)]
+    if retry_sample:                                        # lượt 2: lấy mẫu cho câu hỏng
+        passes.append((lambda: [x for x in todo if (x[0], x[1]) in tried] + failed_now, True))
     for group, sample in passes:
         group = group() if callable(group) else group
         if sample and group:
@@ -225,18 +246,16 @@ def generate(cfg, mode, model=None, langs=LANGS, qids=None, shard="0/1", limit=0
                 continue
             sec = (time.time() - t1) / len(b)
             with out.open("a", encoding="utf-8") as f:
-                for (q, lg, t), raw in zip(b, texts):
-                    doc = clean(raw)
-                    ok, why = check(doc, lg, mode)
-                    n_ok += ok
-                    if not ok and not sample:
-                        failed_now.append((q, lg, t))
-                    f.write(json.dumps({"id": q, "lang": lg, "mode": mode, "query": t, "doc": doc, "ok": ok,
-                                        "why": why, "raw": raw, "model": mid, "sampled": sample, "sec": round(sec, 2)},
-                                       ensure_ascii=False) + "\n")
+                for x, raw in zip(b, texts):
+                    r = record(x, raw, sample, sec)
+                    n_ok += bool(r["ok"])
+                    if not r["ok"] and not sample:
+                        failed_now.append(x)
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
             k += len(b)
             n_done += len(b)
             log(f"  {n_done} lượt, hợp lệ {n_ok}, lô {bs}, {time.time() - t0:.0f}s ({sec:.1f}s/lượt ở lô này)")
+    return n_ok
 
 
 # ---------------------------------------------------------------- dựng file câu hỏi cho retrieve --variant
