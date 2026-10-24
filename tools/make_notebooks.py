@@ -237,7 +237,7 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
 **Thử trên bộ nhãn:** thêm file danh sách câu (vd `queries.csv`) làm Input, đặt `QIDS = 'queries.csv'` → chỉ rerank các câu
 đó, ra `runs/<run>_<method>_sub.parquet`, không tạo bài nộp. bge top-400 ~6 s/câu/GPU (đo 19/10).
 """),
-    setup_cell("k5-v6", "RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
+    setup_cell("k5-v7", "RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
                         "METHODS = ['cross']                  # thêm 'colbert' nếu muốn so sánh; [] = chỉ nộp RUN có sẵn\n"
                         "TOP_N = 400\nK_DOC, K_CHUNK = 200, 185\n"
                         "QIDS = ''                            # thử trên bộ nhãn: 'queries.csv' (tìm trong /kaggle/input) "
@@ -247,6 +247,10 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                         "[1, 2] = 2 bài nộp _mpd1, _mpd2\n"
                         "CHUNK_PROBS = ''                     # phân bổ lại ngân sách đoạn theo P(yes): tên run Qwen3 trong "
                         "Input (vd 'lin07_qwen3i') → thêm bài nộp _cbud; '' = tắt\n"
+                        "CHUNK_K_MIN = 100                    # số đoạn tối thiểu mỗi câu khi phân bổ (k tối đa 400)\n"
+                        "CHUNK_CALIB = ''                     # hiệu chỉnh P(yes) theo 'precision,recall' đoạn trên LB của bài "
+                        "185 đoạn (vd '0.0525,0.1555') → bài _cbudcal\n"
+                        "CALIB_QIDS = 'public600_qids.txt'   # câu LB đã chấm (Input) để khớp hiệu chỉnh\n"
                         "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)",
                "('chunks', 'qtrans')"),
     code('''
@@ -295,7 +299,11 @@ CPARG = ''
 if CHUNK_PROBS:
     h = locate_all(f'runs/{CHUNK_PROBS}.parquet')
     assert h, f'Không thấy runs/{CHUNK_PROBS}.parquet trong /kaggle/input'
-    CPARG = f" --chunk-probs {h[0] / 'runs' / (CHUNK_PROBS + '.parquet')}"
+    CPARG = f" --chunk-probs {h[0] / 'runs' / (CHUNK_PROBS + '.parquet')} --chunk-k-min {CHUNK_K_MIN}"
+    if CHUNK_CALIB:
+        hq = sorted(glob.glob(f'{KAGGLE}/input/**/{CALIB_QIDS}', recursive=True), key=len)
+        assert hq, f'Không thấy {CALIB_QIDS} trong /kaggle/input'
+        CPARG += f' --chunk-calib {CHUNK_CALIB} --calib-qids {hq[0]}'
 for name in ([] if QIDS else [RUN] * SUBMIT_RUN + NAMES[1:] + [f'{RUN}_{m}' for m in METHODS]):
     for mpd in MAX_PER_DOC:
         for cp in sorted({'', CPARG}):                    # CHUNK_PROBS → cả bài thường (185 đoạn) lẫn bài _cbud

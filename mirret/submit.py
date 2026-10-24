@@ -14,8 +14,17 @@ nhưng mỗi câu được k ∈ [--chunk-k-min, --chunk-k-max] đoạn. p(đo�
 lớn nhất (dừng khi hết ngân sách hoặc không còn mức tăng dương). Câu không có xác suất hợp lệ (vd câu lấp bằng
 tools/fill_run.py: điểm ngoài [0, 1]) giữ k_chunk. Không có tham số dò.
 
+Hiệu chỉnh (--chunk-calib P,R --calib-qids public.txt): P(yes) của Qwen3 quá tự tin (Σp top-400 ~206 / câu so với ~63
+đoạn đúng thật) nên quy tắc dừng không bao giờ chạy. p' = σ(a·logit p + b), G = Σ_top-N p' / ρ; b và ρ khớp để danh sách
+tham chiếu (--calib-k đoạn đầu, đúng bài đã nộp) có precision / recall dự đoán TB trên các câu --calib-qids bằng P / R của
+LB (chỉ số tổng, không dùng nhãn từng đoạn). Độ dốc a (--calib-slope, mặc định 0,40) khớp ngày 25/10 với LB: cắt 185 → 150
+đoạn (d150c150 so với lin07_cross) làm chunk F2 còn 0,0870 / 0,0923 = 0,943 lần; a = 1 (giữ độ dốc Qwen3) dự đoán gần
+như không giảm (0,998) → Qwen3 phân biệt đầu / cuối danh sách quá dốc. Sau hiệu chỉnh câu hẹp có thể dừng sớm; k_chunk
+thành trần ngân sách.
+
   python -m mirret.submit --run runs/rrf9_colbert.parquet [--name bai1] [--k-doc 200] [--k-chunk 185] [--doc-agg sum2]
-                           [--chunk-probs runs/lin07_qwen3i.parquet] [--verify-corpus]
+                           [--chunk-probs runs/lin07_qwen3i.parquet [--chunk-calib 0.0525,0.1555 --calib-qids q.txt]]
+                           [--verify-corpus]
 """
 import argparse
 import heapq
@@ -59,6 +68,41 @@ def chunk_probs(path, top_n=400):
     return out
 
 
+def calibrate(cands, probs, fit_qids, k_ref, target_p, target_r, slope=0.40):
+    """Hiệu chỉnh P(yes): p' = σ(a·logit p + b), G = Σ p' / ρ (xem đầu file) → (probs mới, b, ρ)."""
+    sig = lambda x: 1 / (1 + np.exp(-x))
+    lg = {}
+    for q, (pu, _) in probs.items():
+        pp = np.clip(np.array(list(pu.values()), dtype=np.float64), 1e-6, 1 - 1e-6)
+        lg[q] = (pu, slope * (np.log(pp) - np.log1p(-pp)))
+    fit = [q for q in fit_qids if q in probs and q in cands and cands[q]]
+    if not fit:
+        raise SystemExit("--calib-qids không có câu nào có xác suất")
+    ref = {}
+    for q in fit:
+        pu, l = lg[q]
+        idx = {u: i for i, u in enumerate(pu)}
+        ref[q] = np.array([l[idx[u]] if u in idx else -np.inf for u, _, _ in cands[q][:k_ref]])
+    prec = lambda b: np.mean([sig(ref[q] + b).mean() for q in fit])
+    lo, hi = -30.0, 10.0
+    for _ in range(100):                                 # precision dự đoán tăng theo b → chia đôi
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if prec(mid) < target_p else (lo, mid)
+    b = (lo + hi) / 2
+    rho = target_r / np.mean([sig(ref[q] + b).sum() / sig(lg[q][1] + b).sum() for q in fit])
+    if rho > 1:
+        print(f"  CẢNH BÁO: ρ = {rho:.2f} > 1 (recall đích không khớp được) → đặt ρ = 1")
+        rho = 1.0
+    out = {}
+    for q, (pu, l) in lg.items():
+        p2 = sig(l + b)
+        out[q] = (dict(zip(pu, p2)), float(p2.sum() / rho))
+    G = np.array([g for _, g in out.values()])
+    print(f"  hiệu chỉnh trên {len(fit)} câu: a = {slope}, b = {b:.3f}, ρ = {rho:.3f} → precision@{k_ref} dự đoán {prec(b):.4f}; "
+          f"G TB {G.mean():.0f} (p10–p90 {np.percentile(G, 10):.0f}–{np.percentile(G, 90):.0f})")
+    return out, b, rho
+
+
 def allocate(cands, probs, k_chunk, k_min, k_max):
     """Số đoạn mỗi câu: câu có xác suất chia chung ngân sách k_chunk × số câu đó (tham lam theo mức tăng kỳ vọng F2)."""
     ks = {q: min(k_chunk, len(c)) for q, c in cands.items()}
@@ -87,14 +131,16 @@ def allocate(cands, probs, k_chunk, k_min, k_max):
         if ks[q] < len(cum[q]) - 1:
             heapq.heappush(heap, (-(ef2(q, ks[q] + 1) - ef2(q, ks[q])), q))
     k = np.array([ks[q] for q in pool])
-    print(f"  phân bổ đoạn ({len(pool)} câu có xác suất): TB {k.mean():.1f}, trung vị {int(np.median(k))}, "
+    print(f"  phân bổ đoạn ({len(pool)} câu có xác suất): dùng {k.sum()}/{k_chunk * len(pool)} (dừng sớm: còn {budget}), "
+          f"TB {k.mean():.1f}, trung vị {int(np.median(k))}, "
           f"p10–p90 {int(np.percentile(k, 10))}–{int(np.percentile(k, 90))}, ={k_min}: {(k == k_min).mean():.0%}, "
           f"={k_max}: {(k == k_max).mean():.0%}")
     return ks
 
 
 def build(run, qids, k_doc, k_chunk, texts, doc_agg="max", norm_depth=400, max_per_doc=0, probs=None,
-          chunk_k=(100, 400)):
+          chunk_k=(100, 400), calib=None):
+    """calib = (fit_qids, k_ref, P, R, a) → hiệu chỉnh xác suất trước khi phân bổ (xem calibrate)."""
     by_q = {q: g.sort_values("rank") for q, g in run.groupby("qid")}
     dr = runs.doc_ranking(run, doc_agg, norm_depth).sort_values(["qid", "drank"])
     docs_q = {q: [int(d) for d in g["doc_id"]][:k_doc] for q, g in dr.groupby("qid")}
@@ -119,6 +165,8 @@ def build(run, qids, k_doc, k_chunk, texts, doc_agg="max", norm_depth=400, max_p
                 cnt[d] = cnt.get(d, 0) + 1
                 chunks.append((u, int(d), t))
         cands[q] = chunks
+    if probs and calib:
+        probs = calibrate(cands, probs, *calib)[0]
     ks = allocate(cands, probs, k_chunk, *chunk_k) if probs else {q: k_chunk for q in qids}
     return [{"id": int(q), "relevant_docs": docs_q[q] if q in by_q else [],
              "relevant_chunks": [{"doc_id": d, "chunk_text": t} for _, d, t in cands[q][:ks[q]]]} for q in qids]
@@ -181,6 +229,11 @@ def main():
                     help="run có điểm P(yes) (qwen3/qwen3i) → phân bổ lại ngân sách đoạn giữa các câu")
     ap.add_argument("--chunk-k-min", type=int, default=100)
     ap.add_argument("--chunk-k-max", type=int, default=400)
+    ap.add_argument("--chunk-calib", default=None, metavar="P,R",
+                    help="hiệu chỉnh P(yes) theo precision, recall đoạn trên LB của danh sách tham chiếu (vd 0.0525,0.1555)")
+    ap.add_argument("--calib-qids", default=None, help="các câu LB đã chấm (vd public600_qids.txt) để khớp hiệu chỉnh")
+    ap.add_argument("--calib-k", type=int, default=185, help="độ dài danh sách tham chiếu (bài đã nộp có P, R ở trên)")
+    ap.add_argument("--calib-slope", type=float, default=0.40, help="độ dốc a của hiệu chỉnh (xem đầu file)")
     ap.add_argument("--verify-corpus", action="store_true", help="đối chiếu chunk_text với chữ thuần của bài (chậm hơn)")
     a = ap.parse_args()
     cfg = config.load(a.config)
@@ -190,6 +243,12 @@ def main():
     mpd = a.max_per_doc if a.max_per_doc is not None else int(sc.get("max_per_doc", 0) or 0)
     qids = [int(x) for x in pq.read_table(cfg.path("queries"), columns=["id"]).column("id").to_pylist()]
     probs = chunk_probs(a.chunk_probs, cfg["rerank"]["top_n"]) if a.chunk_probs else None
+    calib = None
+    if a.chunk_calib:
+        if not (probs and a.calib_qids):
+            raise SystemExit("--chunk-calib cần --chunk-probs và --calib-qids")
+        tp, tr = (float(x) for x in a.chunk_calib.split(","))
+        calib = (sorted(runs.read_qids(a.calib_qids)), a.calib_k, tp, tr, a.calib_slope)
     if a.chunk_probs:
         print(f"  xác suất đoạn: {len(probs)} câu từ {a.chunk_probs}")
     k_need = max(k_chunk, a.chunk_k_max) if probs else k_chunk
@@ -202,11 +261,12 @@ def main():
     texts = {u: r[2] for u, r in unit_rows(cfg, ids).items()}
     link_ids = set(pq.read_table(cfg.path("links"), columns=["id"]).column("id").to_pylist())
     name = a.name or (Path(a.run).stem + ("" if doc_agg == "max" else f"_{doc_agg}") + (f"_mpd{mpd}" if mpd else "")
-                      + ("_cbud" if probs else ""))
+                      + ("_cbud" + ("cal" if calib else "") + ("" if a.chunk_k_min == 100 else f"_kmin{a.chunk_k_min}")
+                         if probs else ""))
     out_dir = cfg.path("submissions")
     while True:
         sub = build(run, qids, k_doc, k_chunk, texts, doc_agg, cfg["rerank"]["top_n"], mpd, probs,
-                    (a.chunk_k_min, a.chunk_k_max))
+                    (a.chunk_k_min, a.chunk_k_max), calib)
         plains = corpus_plains(cfg, {c["doc_id"] for s in sub for c in s["relevant_chunks"]}) if a.verify_corpus else None
         errs = validate(sub, qids, link_ids, plains)
         if errs:
@@ -222,7 +282,9 @@ def main():
     n_chunks = sum(len(s["relevant_chunks"]) for s in sub)
     (out_dir / f"{name}_meta.json").write_text(json.dumps(
         {"run": a.run, "k_doc": k_doc, "k_chunk": k_chunk, "doc_agg": doc_agg, "max_per_doc": mpd,
-         "chunk_probs": a.chunk_probs, "chunk_k": [a.chunk_k_min, a.chunk_k_max] if probs else None, "zip_mb": round(mb, 1), "queries": len(sub),
+         "chunk_probs": a.chunk_probs, "chunk_k": [a.chunk_k_min, a.chunk_k_max] if probs else None,
+         "chunk_calib": a.chunk_calib, "calib_k": a.calib_k if calib else None,
+         "calib_slope": a.calib_slope if calib else None, "zip_mb": round(mb, 1), "queries": len(sub),
          "chunks": n_chunks}, indent=1), encoding="utf-8")
     print(f"Hợp lệ: {len(sub)} câu hỏi, {n_chunks:,} đoạn, k_doc={k_doc}, k_chunk={k_chunk} → {zp} ({mb:.1f} MB)")
 
