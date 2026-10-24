@@ -20,7 +20,9 @@ tham chiếu (--calib-k đoạn đầu, đúng bài đã nộp) có precision / 
 LB (chỉ số tổng, không dùng nhãn từng đoạn). Độ dốc a (--calib-slope, mặc định 0,40) khớp ngày 25/10 với LB: cắt 185 → 150
 đoạn (d150c150 so với lin07_cross) làm chunk F2 còn 0,0870 / 0,0923 = 0,943 lần; a = 1 (giữ độ dốc Qwen3) dự đoán gần
 như không giảm (0,998) → Qwen3 phân biệt đầu / cuối danh sách quá dốc. Sau hiệu chỉnh câu hẹp có thể dừng sớm; k_chunk
-thành trần ngân sách.
+thành trần ngân sách. LB 25/10: THUA RÕ (trần 200, sàn 50: dùng 163k đoạn, chunk F2 0,0869 so với 0,0969 của bản không
+hiệu chỉnh cùng trần; recall 0,154 → 0,121) → không dùng; LB cho thấy thêm đoạn vẫn có lợi, G của Qwen3 không đủ tin để
+cắt câu "hẹp". Bản dùng: --chunk-probs không hiệu chỉnh, k_chunk 200 (185 → 200: chunk F2 0,0955 → 0,0969).
 
   python -m mirret.submit --run runs/rrf9_colbert.parquet [--name bai1] [--k-doc 200] [--k-chunk 185] [--doc-agg sum2]
                            [--chunk-probs runs/lin07_qwen3i.parquet [--chunk-calib 0.0525,0.1555 --calib-qids q.txt]]
