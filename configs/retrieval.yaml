@@ -74,11 +74,6 @@ expand:                                  # tài liệu giả do LLM sinh (mirret
   bm25_repeat: 3                         # q2d với BM25: câu hỏi lặp n lần + đoạn giả (Query2doc dùng 5 với câu hỏi ngắn)
   out_dir: "qexp"                        # qexp/<mode>-<model>/records*.jsonl ; qexp/<biến thể>/queries_*.parquet
 
-retrieve:
-  langs: [vi, en, zh]                    # nhánh ngôn ngữ câu hỏi (vi = câu gốc)
-  methods: [dense, lsr, bm25]            # 3 × 3 = 9 nhánh
-  levels: [parents, children]            # dense/LSR tìm ở cả hai mức; điểm đoạn con dồn về đoạn cha (RRF trong nhánh)
-  depth: 1000                            # số đoạn cha mỗi nhánh
 qexpand:                                 # viết lại câu hỏi + thuật ngữ mở rộng (mirret/query_expand.py)
   model: qwen25_14b                      # tên trong translate.models; lượng tử theo translate.quant
   max_new_tokens: 320                    # JSON rewrite (≤ 40–60 từ) + ≤ 8 thuật ngữ + ≤ 3 candidates
@@ -93,6 +88,11 @@ qexpand:                                 # viết lại câu hỏi + thuật ng�
   w_cand: 0.0                            # chẩn đoán có khả năng (candidates) — mặc định không dùng, bật trong ablation
   max_df_ratio: 0.05                     # bỏ token của thuật ngữ / candidates có df/n_docs lớn hơn (token câu gốc giữ nguyên)
 
+retrieve:
+  langs: [vi, en, zh]                    # nhánh ngôn ngữ câu hỏi (vi = câu gốc)
+  methods: [dense, lsr, bm25]            # 3 × 3 = 9 nhánh
+  levels: [parents, children]            # dense/LSR tìm ở cả hai mức; điểm đoạn con dồn về đoạn cha (RRF trong nhánh)
+  depth: 1000                            # số đoạn cha mỗi nhánh
   query_batch: 64
   out_dir: "runs"
 
