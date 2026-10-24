@@ -8,6 +8,7 @@ So sánh q2d với hyde = so cách dùng đoạn giả (ghép câu hỏi hay tha
 (như bộ này) thì ghép câu hỏi tốt hơn hẳn chỉ dùng đoạn giả.
 Thêm biến thể không cần LLM:
   bm25c: BM25 với câu hỏi + các khái niệm y khoa (concepts) trong bản dịch t2 — chỉ nhánh BM25.
+  prf  : phản hồi giả định — câu hỏi + 3 đoạn cùng ngôn ngữ đứng đầu run đã rerank (build_prf; cần mir2-chunks).
 
 Đoạn giả viết THẲNG bằng ngôn ngữ của nhánh, từ câu hỏi của nhánh đó (vi gốc, en/zh = bản dịch đang dùng trong
 qtrans/queries_{en,zh}.parquet). Reranker vẫn dùng câu hỏi gốc / bản dịch, không dùng đoạn giả.
@@ -305,12 +306,68 @@ def build(cfg, mode, model=None, name=None, use=None, log=print):
     log(f"→ {out} (xem mẫu: {out / 'samples.md'})")
 
 
+def build_prf(cfg, feedback, name="prf", k=3, max_tokens=140, depth=100, rows=None, tok=None, log=print):
+    """PRF (không cần LLM): câu hỏi của nhánh lang + k đoạn cùng ngôn ngữ đứng đầu run phản hồi (vd lin07_cross, đã
+    rerank bge), mỗi đoạn cắt còn max_tokens token BGE-M3 (câu hỏi dense mã hoá tối đa encode.max_length = 512).
+    dense/LSR: "câu hỏi\\nđoạn 1\\nđoạn 2…"; BM25: câu hỏi lặp expand.bm25_repeat lần + các đoạn (như q2d). Không có đoạn
+    cùng ngôn ngữ trong top-depth → dùng câu hỏi (giữ câu trong fusion)."""
+    out = cfg.path("qexp") / name
+    out.mkdir(parents=True, exist_ok=True)
+    fb = runs.read(feedback, depth=depth).sort_values(["qid", "rank"])
+    if rows is None:
+        from .rerank import unit_rows
+        rows = unit_rows(cfg, fb["unit_id"].unique().tolist())
+    if tok is None:
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(cfg["chunk"]["tokenizer"])
+
+    def cut(text):
+        enc = tok(text, add_special_tokens=False, truncation=True, max_length=max_tokens, return_offsets_mapping=True)
+        offs = enc["offset_mapping"]
+        return text[:offs[-1][1]].strip() if offs else ""
+
+    picks = {}                                            # (qid, lang) → [đoạn]
+    for q, g in fb.groupby("qid"):
+        for u in g["unit_id"]:
+            r = rows.get(u)
+            if r is None:
+                continue
+            lst = picks.setdefault((int(q), r[0]), [])
+            if len(lst) < k:
+                lst.append(r[2])
+    rep = int(cfg["expand"]["bm25_repeat"])
+    samples = [f"# {name}: k = {k}, ≤ {max_tokens} token / đoạn, phản hồi từ {feedback}\n"]
+    for lg in LANGS:
+        qs = queries(cfg, lg)
+        dense, sparse, miss, ntok = [], [], [], []
+        for q, t in sorted(qs.items()):
+            fbt = [x for x in (cut(s) for s in picks.get((q, lg), [])) if x]
+            if not fbt:
+                miss.append(q)
+            dense.append((q, "\n".join([t] + fbt)))
+            sparse.append((q, " ".join([t] * rep + fbt)))
+            ntok.append(len(fbt))
+        write_queries(out / f"queries_{lg}.parquet", dense, lg)
+        write_queries(out / f"queries_{lg}_bm25.parquet", sparse, lg)
+        log(f"  {name}/queries_{lg}: {len(dense)} câu, TB {sum(ntok) / max(1, len(ntok)):.2f} đoạn phản hồi, "
+            f"{len(miss)} câu không có đoạn {lg} trong top-{depth} (dùng câu hỏi)")
+        samples.append(f"## {lg}")
+        samples += [f"**{q}**\n\n> " + d.replace("\n", "\n>\n> ") + "\n" for q, d in dense[:2]]
+    (out / "samples.md").write_text("\n".join(samples), encoding="utf-8")
+    (out / "meta.json").write_text(json.dumps({"mode": "prf", "feedback": str(feedback), "k": k, "max_tokens": max_tokens,
+                                               "depth": depth, "bm25_repeat": rep}, indent=1), encoding="utf-8")
+    log(f"→ {out} (xem mẫu: {out / 'samples.md'})")
+
+
 def main():
     config.stdout_utf8()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["generate", "build"])
     ap.add_argument("--config", default=None)
-    ap.add_argument("--mode", required=True, choices=list(MODES) + ["bm25c"])
+    ap.add_argument("--mode", required=True, choices=list(MODES) + ["bm25c", "prf"])
+    ap.add_argument("--feedback", default=None, help="build prf: run phản hồi (vd runs/lin07_cross.parquet)")
+    ap.add_argument("--prf-k", type=int, default=3, help="build prf: số đoạn phản hồi mỗi ngôn ngữ")
+    ap.add_argument("--prf-tokens", type=int, default=140, help="build prf: số token tối đa mỗi đoạn phản hồi")
     ap.add_argument("--model", default=None, help="tên trong translate.models hoặc id Hugging Face (mặc định expand.model)")
     ap.add_argument("--langs", default=",".join(LANGS))
     ap.add_argument("--qids", default=None, help="chỉ các câu này: file qid (.txt/.csv/.parquet) hoặc '1,2,3'")
@@ -324,9 +381,13 @@ def main():
     cfg = config.load(a.config)
     if a.cmd == "generate":
         if a.mode not in MODES:
-            raise SystemExit("bm25c không cần sinh: chạy thẳng `build --mode bm25c`")
+            raise SystemExit(f"{a.mode} không cần sinh: chạy thẳng `build --mode {a.mode}`")
         generate(cfg, a.mode, a.model, a.langs.split(","), runs.read_qids(a.qids), a.shard, a.limit, a.batch,
                  a.quant)
+    elif a.mode == "prf":
+        if not a.feedback:
+            raise SystemExit("build --mode prf cần --feedback <run đã rerank>")
+        build_prf(cfg, a.feedback, a.name or "prf", a.prf_k, a.prf_tokens)
     else:
         build(cfg, a.mode, a.model, a.name, a.use)
 

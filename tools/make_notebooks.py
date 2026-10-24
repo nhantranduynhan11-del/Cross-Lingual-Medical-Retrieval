@@ -436,12 +436,19 @@ in ở ô (6).
 **Chạy đủ 1.200 câu (1 phiên):** `QIDS = ''`, `MODES = ['q2d']`, `FUSED = ['q2d9']`, `BATCH = 16` → thêm
 `runs/q2d9_cross.parquet` + `submissions/q2d9_cross.zip`. Ước tính 6,5–10 giờ (sinh ~3 giờ, chỉ mục dense 1–4,5 giờ).
 **Đầu ra:** `qexp/`, `runs/` (nhánh biến thể, run gộp, `*_cross_sub`) → dataset **`mir2-qexp`**.
+
+**Biến thể không cần sinh (25/10):** `MODES = ['prf']` (phản hồi giả định: câu hỏi + 3 đoạn cùng ngôn ngữ đầu `FEEDBACK`,
+vd `lin07_cross` — thêm dataset có `runs/lin07_cross.parquet`), `FUSED = ['lin07prf']`; `MODES = ['rw']` (câu viết lại
+của nhóm, thêm dataset có `qexp/rw/queries_*.parquet`), `FUSED = ['lin07rw']`. Thêm output k7 cũ có `index/dense_*` để
+khỏi dựng lại chỉ mục dense. Nhánh baseline chép cả mức `@parents/@children` (lin07 gộp theo mức như bản đã nộp).
 """),
-    setup_cell("k7-v1", "MODES = ['q2d', 'hyde']\nMODEL = 'qwen25_14b'\n"
+    setup_cell("k7-v2", "MODES = ['q2d', 'hyde']             # 'q2d' | 'hyde' (sinh bằng LLM) | 'prf' | 'rw' (không sinh)\n"
+                        "MODEL = 'qwen25_14b'\n"
                         "QIDS = 'queries.csv'                 # '' = cả 1.200 câu\n"
                         "LIMIT = 0                            # >0: chỉ N câu đầu (đọc thử đoạn giả)\n"
                         "BATCH, QUANT = 8, '4bit'\n"
                         "FUSED = ['q2d9', 'hyde9', 'q2dlex', 'bm25c9']   # fuse.configs trong retrieval.yaml\n"
+                        "FEEDBACK = 'lin07_cross'             # 'prf': run đã rerank làm phản hồi (runs/<tên>.parquet trong Input)\n"
                         "TOP_N = 400\nSAVE_INDEX = False", "('chunks',)"),
     code('''
 # (2) Đầu vào: danh sách câu; câu hỏi 3 ngôn ngữ GIỐNG baseline; bản ghi dịch (concepts); đoạn giả phiên trước; 9 nhánh
@@ -467,37 +474,49 @@ def take(src, dst):                                   # trùng tên giữa các 
     if not os.path.exists(dst) or os.path.getsize(src) > os.path.getsize(dst):
         os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy(src, dst); print('chép', src)
 for d in locate_all('qexp'):                           # output k7 phiên trước: đoạn giả, chỉ mục dense, run biến thể
-    for f in glob.glob(f'{d}/qexp/*/records*.jsonl'):
-        take(f, f'{K.work}/qexp/' + os.path.relpath(f, f'{d}/qexp'))
+    for f in glob.glob(f'{d}/qexp/*/records*.jsonl') + glob.glob(f'{d}/qexp/*/queries_*.parquet'):
+        take(f, f'{K.work}/qexp/' + os.path.relpath(f, f'{d}/qexp'))   # queries_*: biến thể dựng sẵn (vd rw)
     for f in glob.glob(f'{d}/index/dense_*'):
         take(f, f'{K.work}/index/' + os.path.basename(f))
     for f in glob.glob(f'{d}/runs/**/*.parquet', recursive=True) + glob.glob(f'{d}/runs/*.json'):
         take(f, f'{K.work}/runs/' + os.path.relpath(f, f'{d}/runs'))
 copied = []
-for f in glob.glob(f'{base}/runs/*.parquet'):
-    if '@' not in os.path.basename(f):
-        shutil.copy(f, RUNS); copied.append(f'{RUNS}/' + os.path.basename(f))
+for f in glob.glob(f'{base}/runs/*.parquet'):               # cả mức @parents/@children: lin07 gộp theo mức
+    shutil.copy(f, RUNS); copied.append(f'{RUNS}/' + os.path.basename(f))
+FB = None
+if 'prf' in MODES:
+    h = locate_all(f'runs/{FEEDBACK}.parquet')
+    assert h, f'MODES có prf: Add Input dataset chứa runs/{FEEDBACK}.parquet'
+    FB = h[0] / 'runs' / f'{FEEDBACK}.parquet'
+    print('phản hồi PRF:', FB)
+GEN = [m for m in MODES if m in ('q2d', 'hyde')]           # chỉ các chế độ này cần LLM
+BM25C = any('bm25c' in f for f in FUSED)
 K.set({'translate.out_dir': QT, 'retrieve.out_dir': RUNS})
 bm = locate('index/bm25', required=False)
 if bm is not None:
     K.set({'bm25.index_dir': str(bm / 'index' / 'bm25')})
 EMB = ','.join(sorted({str(d / 'emb') for d in locate_all('emb')}))
 print('emb:', EMB)
-sh('python -m pip install -q -U bitsandbytes accelerate')
+if GEN:
+    sh('python -m pip install -q -U bitsandbytes accelerate')
 '''),
     code('''
 # (3) Sinh đoạn giả: mỗi chế độ 2 GPU song song (mỗi GPU một bản 4-bit, mỗi bản một nửa số câu)
 lim = f' --limit {LIMIT}' if LIMIT else ''
-for m in MODES:
+for m in GEN:
     par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.expand generate --config {K.cfg} --mode {m} --model {MODEL} '
          f'--shard {g}/2 --batch {BATCH} --quant {QUANT}{QARG}{lim}' for g in range(2)], f'expand_{m}')
 '''),
     code('''
 # (4) Dựng câu hỏi cho từng biến thể + đọc mẫu đoạn giả
-for m in MODES + ['bm25c']:
+for m in GEN + ['bm25c'] * BM25C:
     sh(f'python -m mirret.expand build --config {K.cfg} --mode {m} --model {MODEL}')
+if 'prf' in MODES:
+    sh(f'python -m mirret.expand build --config {K.cfg} --mode prf --feedback {FB}', 'build_prf')
 for m in MODES:
-    print(open(f'{K.work}/qexp/{m}/samples.md', encoding='utf-8').read()[:3000])
+    assert glob.glob(f'{K.work}/qexp/{m}/queries_vi*.parquet'), f'thiếu qexp/{m}/queries_*.parquet (rw: Add Input dataset của nhóm)'
+    if os.path.exists(f'{K.work}/qexp/{m}/samples.md'):
+        print(open(f'{K.work}/qexp/{m}/samples.md', encoding='utf-8').read()[:3000])
 '''),
     code('''
 # (5) Chỉ mục dense (như k4) + mã hoá câu hỏi các biến thể (GPU)
@@ -517,13 +536,13 @@ for m in MODES:
     if done(m, ('dense', 'lsr', 'bm25')):
         print(m, ': 9 nhánh đã có từ phiên trước → bỏ qua truy xuất'); continue
     sh(f'python -m mirret.retrieve run --config {K.cfg} --emb {EMB} --variant {m}', f'retrieve_{m}')
-if not done('bm25c', ('bm25',)):
+if BM25C and not done('bm25c', ('bm25',)):
     sh(f'python -m mirret.retrieve run --config {K.cfg} --methods bm25 --variant bm25c', 'retrieve_bm25c')
 sh(f'python -m mirret.fuse --config {K.cfg} --only {",".join(FUSED)}', 'fuse')
 import pandas as pd
 from mirret import runs as R
 rows = []
-for m in MODES + ['bm25c']:
+for m in MODES + ['bm25c'] * BM25C:
     for b in [f'{lg}_{me}' for lg in ('vi', 'en', 'zh') for me in ('dense', 'lsr', 'bm25')]:
         p, q = f'{RUNS}/{m}_{b}.parquet', f'{RUNS}/{b}.parquet'
         if os.path.exists(p) and os.path.exists(q):

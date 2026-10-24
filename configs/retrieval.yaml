@@ -101,6 +101,10 @@ fuse:
     lin07: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25]}
     # lin07 bỏ trọng số 0,5 của en_lsr / en_bm25 (6 nhánh từ khoá ngang nhau) — đề xuất 24/10, kiểm trên LB (bge) so với lin07_cross
     lin07u: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, en_lsr, en_bm25, zh_dense, zh_lsr, zh_bm25]}
+    # LB 25/10: lin07u_cross doc F2 0,2453 < 0,2460 (lin07_cross 0,2480) → KHÔNG dùng, giữ trọng số 0,5
+    # Sàng lọc tầng 1 (25/10), cộng thêm 9 nhánh vào lin07, cùng trọng số; so doc F2 của <cấu hình>_cross với 0,2480
+    lin07prf: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, prf_vi_dense, prf_vi_lsr, prf_vi_bm25, prf_en_dense, "prf_en_lsr*0.5", "prf_en_bm25*0.5", prf_zh_dense, prf_zh_lsr, prf_zh_bm25]}
+    lin07rw: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, rw_vi_dense, rw_vi_lsr, rw_vi_bm25, rw_en_dense, "rw_en_lsr*0.5", "rw_en_bm25*0.5", rw_zh_dense, rw_zh_lsr, rw_zh_bm25]}
     # Q2D bổ sung (không thay thế) vào fusion tuyến tính: 9 nhánh gốc + 9 nhánh q2d cùng trọng số, α = 0,7 (đăng ký trước)
     lin07q: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, q2d_vi_dense, q2d_vi_lsr, q2d_vi_bm25, q2d_en_dense, "q2d_en_lsr*0.5", "q2d_en_bm25*0.5", q2d_zh_dense, q2d_zh_lsr, q2d_zh_bm25]}
 
