@@ -32,14 +32,20 @@ def load_queries(path):
 def qencode(cfg, langs, device, log=print):
     from .encode import encode_texts, load_encoder, resolve_device
     ec = cfg["encode"]
+    qdir = cfg.path("qemb")
+    qdir.mkdir(parents=True, exist_ok=True)
+    todo = [lg for lg in langs if not (qdir / f"{lg}.npz").exists()]
+    if not todo:
+        log(f"  Mọi câu hỏi đã được mã hoá ({qdir}/*.npz) → bỏ qua")
+        return
     enc = load_encoder(ec["model"], resolve_device(device), ec["fp16"], ec["max_length"])
-    for lg in langs:
+    for lg in todo:
         p = queries_path(cfg, lg)
         if not p.exists():
             log(f"  [{lg}] chưa có {p} → bỏ qua")
             continue
         qids, texts = load_queries(p)
-        out = encode_texts(enc, qids, texts, cfg.path("qemb") / f"{lg}.npz", ec["batch_tokens"])
+        out = encode_texts(enc, qids, texts, qdir / f"{lg}.npz", ec["batch_tokens"])
         log(f"  [{lg}] {len(qids)} câu → {out}")
 
 
@@ -85,8 +91,9 @@ def run_level(cfg, lang, method, level, depth, emb=None, allowed=None, log=print
     return df[df["rank"] <= depth].reset_index(drop=True)
 
 
-def run_all(cfg, langs, methods, emb=None, prefix=None, log=print):
-    rc, rdir = cfg["retrieve"], cfg.path("runs")
+def run_all(cfg, langs, methods, emb=None, prefix=None, out_dir=None, log=print):
+    rc = cfg["retrieve"]
+    rdir = Path(out_dir) if out_dir else cfg.path("runs")
     rdir.mkdir(parents=True, exist_ok=True)
     depth = rc["depth"]
     allowed = {}                                           # LSR: chỉ vector khớp bản chunks hiện tại
@@ -105,6 +112,7 @@ def run_all(cfg, langs, methods, emb=None, prefix=None, log=print):
                 df = run_level(cfg, lang, method, level, depth, emb, al, log)
                 if df is None:
                     continue
+                level_runs[level] = df
                 if prefix:
                     runs.write(df, rdir / f"{prefix}_{lang}_{method}@{level}.parquet",
                                {"lang": lang, "method": method, "level": level, "depth": depth, "prefix": prefix})
@@ -140,6 +148,7 @@ def main():
     ap.add_argument("--methods", default=None)
     ap.add_argument("--emb", default=None, help="thư mục emb cho LSR (phẩy ngăn cách); mặc định <work>/emb")
     ap.add_argument("--prefix", default=None, help="tiền tố tên run (vd e5 -> e5_vi.parquet)")
+    ap.add_argument("--out", "--out-dir", default=None, dest="out_dir", help="Thư mục ghi kết quả runs")
     ap.add_argument("--device", default="cuda:0")
     a = ap.parse_args()
     cfg = config.load(a.config)
@@ -153,7 +162,7 @@ def main():
         prefix = a.prefix
         if prefix is None and "e5" in str(cfg.get("encode", {}).get("model", "")).lower():
             prefix = "e5"
-        run_all(cfg, langs, methods, emb, prefix=prefix)
+        run_all(cfg, langs, methods, emb, prefix=prefix, out_dir=a.out_dir)
 
 
 if __name__ == "__main__":

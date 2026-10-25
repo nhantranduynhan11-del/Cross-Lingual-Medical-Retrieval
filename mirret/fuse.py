@@ -125,19 +125,24 @@ def main():
     ap.add_argument("--only", default=None)
     ap.add_argument("--runs", default=None, help="danh sách run để gộp (tên file trong runs/, không đuôi)")
     ap.add_argument("--run-dirs", default=None, help="các thư mục chứa runs (phẩy ngăn cách)")
+    ap.add_argument("--out", "--out-dir", default=None, dest="out_dir", help="Thư mục ghi kết quả runs đã fuse")
     ap.add_argument("--name", default=None)
     ap.add_argument("--alpha", type=float, default=0.7, help="Trọng số alpha cho linear fusion (mặc định 0.7 dense)")
     a = ap.parse_args()
     cfg = config.load(a.config)
     fc = cfg["fuse"]
-    rdir = cfg.path("runs")
+    rdir = Path(a.out_dir) if a.out_dir else cfg.path("runs")
+    rdir.mkdir(parents=True, exist_ok=True)
     search_dirs = [rdir]
     if a.run_dirs:
-        search_dirs.extend([Path(x.strip()) for x in a.run_dirs.split(",") if x.strip()])
-    else:
-        for extra in (cfg.work_dir / "runs", cfg.work_dir / "runs_e5"):
-            if extra not in search_dirs:
-                search_dirs.append(extra)
+        for x in a.run_dirs.split(","):
+            if x.strip():
+                p = Path(x.strip())
+                if p not in search_dirs:
+                    search_dirs.append(p)
+    for extra in (cfg.work_dir / "runs", cfg.work_dir / "runs_e5"):
+        if extra not in search_dirs:
+            search_dirs.append(extra)
 
     if a.runs:
         configs = {a.name or "fused": a.runs.split(",")}
