@@ -209,6 +209,17 @@ def rerank(cfg, df, method, device, log=print):
     return runs.rerank_by_score(pd.concat(out, ignore_index=True)) if out else df.iloc[:0]
 
 
+def reuse_scores(paths, top_n, qids):
+    """Điểm reranker đã có: {(qid, unit_id): score} từ các run đã rerank bằng CÙNG phương pháp (phần top-N; bỏ phần đuôi
+    với_tail có điểm -(hạng + 100000)). Điểm của một cặp không phụ thuộc ứng viên khác → dùng lại đúng như chấm lại."""
+    parts = []
+    for p in paths:
+        r = runs.read(p, depth=top_n, qids=qids)
+        parts.append(r[r["score"] > -1e4][["qid", "unit_id", "score"]])
+    c = pd.concat(parts, ignore_index=True).drop_duplicates(["qid", "unit_id"])
+    return c.set_index(["qid", "unit_id"])["score"]
+
+
 def with_tail(reranked, base, top_n):
     """Top-N đã xếp hạng lại + phần đuôi (hạng > N) của run gốc, đánh rank liên tục."""
     tail = base[base["rank"] > top_n].copy()
@@ -235,6 +246,9 @@ def main():
     ap.add_argument("--qids", default=None, help="chỉ các câu này: file qid (.txt/.csv/.parquet) hoặc '1,2,3'")
     ap.add_argument("--name", default=None, help="tên run kết quả (mặc định <run>_<method>, thêm _sub khi có --qids)")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--reuse", nargs="*", default=None,
+                    help="run đã rerank bằng cùng phương pháp (vd runs/lin07_qwen3i_1200.parquet): dùng lại điểm các cặp "
+                         "(câu, đoạn) đã chấm, chỉ chấm cặp mới")
     a = ap.parse_args()
     cfg = config.load(a.config)
     rc = cfg["rerank"]
@@ -257,9 +271,21 @@ def main():
     if not part.exists() or a.force:
         mine = [q for k, q in enumerate(sorted(base["qid"].unique())) if k % sn == si]
         df = base[base["qid"].isin(mine) & (base["rank"] <= top_n)]
-        res = rerank(cfg, df, method, a.device)
+        reused = 0
+        if a.reuse:
+            cache = reuse_scores(a.reuse, top_n, set(mine))
+            hit = pd.MultiIndex.from_frame(df[["qid", "unit_id"]]).isin(cache.index)
+            old = df[hit].drop(columns="score").merge(cache.reset_index(), on=["qid", "unit_id"])
+            reused = len(old)
+            print(f"  --reuse: dùng lại {reused}/{len(df)} cặp ({reused / max(1, len(df)):.0%}), chấm mới {int((~hit).sum())}")
+            new = rerank(cfg, df[~hit], method, a.device) if (~hit).any() else df.iloc[:0]
+            cols = ["qid", "unit_id", "doc_id", "rank", "score"]
+            res = runs.rerank_by_score(pd.concat([old[cols], new[cols]], ignore_index=True))
+        else:
+            res = rerank(cfg, df, method, a.device)
         runs.write(res, part, {"run": str(run_path), "method": method, "top_n": top_n, "shard": a.shard,
-                               "qids": len(qids) if qids else "all", "rerank": rc})
+                               "qids": len(qids) if qids else "all", "rerank": rc, "reused_pairs": reused,
+                               "reuse": a.reuse})
         print(f"→ {part}")
     parts = sorted(part_dir.glob(f"part-*-of-{sn}.parquet"))
     if len(parts) == sn:

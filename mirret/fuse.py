@@ -48,9 +48,9 @@ def union_rerank(run_list, top_n=400, depth=1000, k=60):
     return runs.rerank_by_score(pd.concat([head, tail], ignore_index=True), depth)
 
 
-def branch_scores(rdir, name, depth=None):
+def branch_scores(rdir, name, depth=None, exclude=None):
     """Điểm thô của một nhánh, chuẩn hoá min-max theo câu hỏi ở từng mức, đoạn cha lấy max giữa các mức → (qid, unit_id,
-    doc_id, s). None nếu thiếu file."""
+    doc_id, s). None nếu thiếu file. exclude: tập doc_id bỏ TRƯỚC khi chuẩn hoá (vd bài PubMed)."""
     ps = [rdir / f"{name}@{lv}.parquet" for lv in ("parents", "children")]
     ps = [p for p in ps if p.exists()] or [p for p in [rdir / f"{name}.parquet"] if p.exists()]
     if not ps:
@@ -58,6 +58,8 @@ def branch_scores(rdir, name, depth=None):
     parts = []
     for p in ps:
         df = runs.read(p, depth)
+        if exclude:
+            df = df[~df["doc_id"].isin(exclude)]
         g = df.groupby("qid")["score"]
         lo, hi = g.transform("min"), g.transform("max")
         parts.append(df.assign(s=(df["score"] - lo) / (hi - lo).where(hi > lo, 1.0))[["qid", "unit_id", "doc_id", "s"]])
@@ -106,8 +108,9 @@ def main():
             raise SystemExit(f"fuse.configs không có {unknown} (có: {list(fc['configs'])}) — kiểm tra bản mir2-code")
     for name, items in configs.items():
         if isinstance(items, dict):                       # fusion tuyến tính
+            excl = runs.pubmed_ids(cfg) if items.get("exclude") == "pubmed" else None
             alpha, items = float(items["linear"]), [parse_item(x) for x in items["runs"]]
-            scored = [(r, w, branch_scores(rdir, r, fc["depth"])) for r, w in items]
+            scored = [(r, w, branch_scores(rdir, r, fc["depth"], excl)) for r, w in items]
             miss = [r for r, _, df in scored if df is None]
             if miss:
                 print(f"  {name}: thiếu run {miss} → bỏ qua")
@@ -116,7 +119,8 @@ def main():
                 continue
             df = linear(scored, alpha, fc["depth"])
             runs.write(df, rdir / f"{name}.parquet", {"fusion": "linear", "alpha": alpha, "runs": [r for r, _ in items],
-                                                      "weights": [w for _, w in items], "norm": "min-max theo câu"})
+                                                      "weights": [w for _, w in items], "norm": "min-max theo câu",
+                                                      "exclude": "pubmed" if excl else None})
             print(f"  → {rdir / (name + '.parquet')} ({df['qid'].nunique()} câu hỏi)")
             continue
         items = [parse_item(x) for x in items]

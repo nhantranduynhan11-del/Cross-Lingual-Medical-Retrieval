@@ -39,6 +39,13 @@ def from_topk(qids, ids_per_q, scores_per_q):
     return df[["qid", "unit_id", "doc_id", "rank", "score"]]
 
 
+def pubmed_ids(cfg):
+    """id các bài PubMed trong links (toàn bộ tài liệu tiếng Anh của kho). LB 25/10: bỏ hết khỏi bài nộp → doc / chunk
+    recall không đổi, precision tăng (0,1804 → 0,1946) → đáp án public không có bài PubMed nào."""
+    t = pq.read_table(cfg.path("links"), columns=["id", "url"]).to_pydict()
+    return {int(i) for i, u in zip(t["id"], t["url"]) if "pubmed.ncbi.nlm.nih.gov" in (u or "")}
+
+
 def rerank_by_score(df, depth=None):
     """Sắp lại theo score giảm dần trong mỗi qid, đánh rank lại từ 1 (giữ thứ tự cũ khi bằng điểm)."""
     df = df.sort_values(["qid", "score", "rank"], ascending=[True, False, True], kind="stable").copy()

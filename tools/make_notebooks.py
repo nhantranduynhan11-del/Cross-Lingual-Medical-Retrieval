@@ -237,7 +237,7 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
 **Thử trên bộ nhãn:** thêm file danh sách câu (vd `queries.csv`) làm Input, đặt `QIDS = 'queries.csv'` → chỉ rerank các câu
 đó, ra `runs/<run>_<method>_sub.parquet`, không tạo bài nộp. bge top-400 ~6 s/câu/GPU (đo 19/10).
 """),
-    setup_cell("k5-v7", "RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
+    setup_cell("k5-v8", "RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
                         "METHODS = ['cross']                  # thêm 'colbert' nếu muốn so sánh; [] = chỉ nộp RUN có sẵn\n"
                         "TOP_N = 400\nK_DOC, K_CHUNK = 200, 185\n"
                         "QIDS = ''                            # thử trên bộ nhãn: 'queries.csv' (tìm trong /kaggle/input) "
@@ -251,6 +251,9 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                         "CHUNK_CALIB = ''                     # hiệu chỉnh P(yes) theo 'precision,recall' đoạn trên LB của bài "
                         "185 đoạn (vd '0.0525,0.1555') → bài _cbudcal\n"
                         "CALIB_QIDS = 'public600_qids.txt'   # câu LB đã chấm (Input) để khớp hiệu chỉnh\n"
+                        "REUSE = {}                           # dùng lại điểm đã chấm: {phương pháp: run trong Input}, vd "
+                        "{'cross': 'lin07_cross', 'qwen3i': 'lin07_qwen3i_1200'} → chỉ chấm đoạn mới\n"
+                        "ENSEMBLE = False                     # True + METHODS có 'cross' và 'qwen3i' → thêm run <RUN>_ensi\n"
                         "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)",
                "('chunks', 'qtrans')"),
     code('''
@@ -272,19 +275,35 @@ QARG = f' --qids "{QIDS}"' if QIDS else ''        # run thử trên bộ nhãn t
 print('câu hỏi:', QIDS or 'cả 1.200 câu')
 if not os.path.exists(f'{RUNS_IN}/{RUN}.parquet'):        # vd mir2-runs cũ chưa có rrf9_w → gộp lại từ 9 nhánh (CPU, ~1 phút)
     for f in glob.glob(f'{RUNS_IN}/*.parquet'):
-        if '@' not in os.path.basename(f) and not os.path.exists(f'{OUT}/' + os.path.basename(f)):
+        if not os.path.exists(f'{OUT}/' + os.path.basename(f)):   # cả @parents/@children: gộp theo mức như lin07
             shutil.copy(f, OUT)
     K.set({'retrieve.out_dir': OUT})
     sh(f'python -m mirret.fuse --config {K.cfg} --only {RUN}', 'fuse')
     assert os.path.exists(f'{OUT}/{RUN}.parquet'), f'fuse không tạo được {RUN} (thiếu nhánh, xem dòng "thiếu run" ở trên)'
     RUNS_IN = OUT
 print('run đầu vào:', f'{RUNS_IN}/{RUN}.parquet')
+def run_path(n):                                     # run trong phiên này (OUT) hoặc trong Input
+    if os.path.exists(f'{OUT}/{n}.parquet'):
+        return f'{OUT}/{n}.parquet'
+    h = locate_all(f'runs/{n}.parquet')
+    assert h, f'Không thấy runs/{n}.parquet trong /kaggle/input'
+    return str(h[0] / 'runs' / f'{n}.parquet')
 for m in METHODS:
+    RA = f' --reuse {run_path(REUSE[m])}' if m in REUSE else ''
     par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.rerank --config {K.cfg} --run {RUNS_IN}/{RUN}.parquet '
-         f'--method {m} --top-n {TOP_N} --shard {g}/2 --device cuda:0 --out {OUT}{QARG}' for g in range(2)],
+         f'--method {m} --top-n {TOP_N} --shard {g}/2 --device cuda:0 --out {OUT}{QARG}{RA}' for g in range(2)],
         f'rerank_{m}')
     sh(f'python -m mirret.rerank --config {K.cfg} --run {RUNS_IN}/{RUN}.parquet --method {m} --top-n {TOP_N} '
-       f'--shard 0/2 --out {OUT}{QARG}')              # gộp 2 phần
+       f'--shard 0/2 --out {OUT}{QARG}{RA}')          # gộp 2 phần
+ENS = []
+if ENSEMBLE:
+    assert 'cross' in METHODS and 'qwen3i' in METHODS, 'ENSEMBLE cần METHODS có cả cross và qwen3i'
+    sfx = '_sub' if QIDS else ''
+    sh(f'python -m mirret.ensemble --base {RUNS_IN}/{RUN}.parquet --bge {OUT}/{RUN}_cross{sfx}.parquet '
+       f'--qwen {OUT}/{RUN}_qwen3i{sfx}.parquet --out {OUT} --suffix i{sfx}', 'ensemble')
+    for f in glob.glob(f'{OUT}/{RUN}_ip0[68]i*'):                # ensemble.py ghi thêm hai run nội suy — không dùng
+        os.remove(f)
+    ENS = [f'{RUN}_ensi']
 '''),
     code('''
 # (3) Bài nộp: run gộp (không rerank) + từng run đã rerank. Run thử trên bộ nhãn (QIDS) thì không nộp.
@@ -297,14 +316,12 @@ for n in NAMES[1:]:
     shutil.copy(h[0] / 'runs' / f'{n}.parquet', f'{OUT}/{n}.parquet')
 CPARG = ''
 if CHUNK_PROBS:
-    h = locate_all(f'runs/{CHUNK_PROBS}.parquet')
-    assert h, f'Không thấy runs/{CHUNK_PROBS}.parquet trong /kaggle/input'
-    CPARG = f" --chunk-probs {h[0] / 'runs' / (CHUNK_PROBS + '.parquet')} --chunk-k-min {CHUNK_K_MIN}"
+    CPARG = f" --chunk-probs {run_path(CHUNK_PROBS)} --chunk-k-min {CHUNK_K_MIN}"   # run của phiên này hoặc Input
     if CHUNK_CALIB:
         hq = sorted(glob.glob(f'{KAGGLE}/input/**/{CALIB_QIDS}', recursive=True), key=len)
         assert hq, f'Không thấy {CALIB_QIDS} trong /kaggle/input'
         CPARG += f' --chunk-calib {CHUNK_CALIB} --calib-qids {hq[0]}'
-for name in ([] if QIDS else [RUN] * SUBMIT_RUN + NAMES[1:] + [f'{RUN}_{m}' for m in METHODS]):
+for name in ([] if QIDS else [RUN] * SUBMIT_RUN + NAMES[1:] + [f'{RUN}_{m}' for m in METHODS] + ENS):
     for mpd in MAX_PER_DOC:
         for cp in sorted({'', CPARG}):                    # CHUNK_PROBS → cả bài thường (185 đoạn) lẫn bài _cbud
             sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} '
