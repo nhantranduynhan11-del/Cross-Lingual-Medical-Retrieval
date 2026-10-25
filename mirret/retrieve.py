@@ -105,12 +105,12 @@ def run_all(cfg, langs, methods, emb=None, prefix=None, log=print):
                 df = run_level(cfg, lang, method, level, depth, emb, al, log)
                 if df is None:
                     continue
-                level_runs[level] = df
-                runs.write(df, rdir / f"{lang}_{method}@{level}.parquet",
-                           {"lang": lang, "method": method, "level": level, "depth": depth})
                 if prefix:
                     runs.write(df, rdir / f"{prefix}_{lang}_{method}@{level}.parquet",
                                {"lang": lang, "method": method, "level": level, "depth": depth, "prefix": prefix})
+                else:
+                    runs.write(df, rdir / f"{lang}_{method}@{level}.parquet",
+                               {"lang": lang, "method": method, "level": level, "depth": depth})
             if not level_runs:
                 log(f"  {lang}_{method}: KHÔNG có mức nào chạy được")
                 continue
@@ -118,15 +118,16 @@ def run_all(cfg, langs, methods, emb=None, prefix=None, log=print):
                 br = next(iter(level_runs.values()))
             else:
                 br = fuse.rrf(list(level_runs.values()), cfg["fuse"]["rrf_k"], depth)
-            runs.write(br, rdir / f"{lang}_{method}.parquet",
-                       {"lang": lang, "method": method, "levels": list(level_runs), "depth": depth,
-                        "level_fusion": "rrf" if len(level_runs) > 1 else None})
             if prefix:
                 tag = f"{prefix}_{lang}"
                 runs.write(br, rdir / f"{tag}.parquet",
                            {"lang": lang, "method": method, "levels": list(level_runs), "depth": depth,
                             "prefix": prefix, "level_fusion": "rrf" if len(level_runs) > 1 else None})
-                log(f"  → Đã lưu thêm alias: {rdir / f'{tag}.parquet'}")
+                log(f"  → Đã lưu run độc lập: {rdir / f'{tag}.parquet'}")
+            else:
+                runs.write(br, rdir / f"{lang}_{method}.parquet",
+                           {"lang": lang, "method": method, "levels": list(level_runs), "depth": depth,
+                            "level_fusion": "rrf" if len(level_runs) > 1 else None})
             log(f"  {lang}_{method}: {br['qid'].nunique()} câu hỏi, mức {list(level_runs)}, {time.time() - t0:.0f}s")
 
 

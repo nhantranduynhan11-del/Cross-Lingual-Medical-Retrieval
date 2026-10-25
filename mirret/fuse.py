@@ -98,10 +98,10 @@ def load_runs(rdirs, names, depth=None):
         candidates = [f"{n}.parquet"]
         if n.startswith("e5_"):
             lang = n[3:]
-            candidates.extend([f"{lang}_dense.parquet", f"{lang}_e5.parquet", f"e5_{lang}.parquet"])
+            candidates.extend([f"e5_{lang}.parquet", f"{lang}_e5.parquet"])
         elif n.endswith("_e5"):
             lang = n.split("_")[0]
-            candidates.extend([f"e5_{lang}.parquet", f"{lang}_dense.parquet"])
+            candidates.extend([f"{lang}_e5.parquet", f"e5_{lang}.parquet"])
 
         for d in rdirs:
             if not d.exists():
