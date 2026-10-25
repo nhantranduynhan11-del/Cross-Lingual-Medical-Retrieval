@@ -29,9 +29,11 @@ from mirret.chunk import parse  # noqa: E402
 
 
 def span(plain, anchor, target):
-    """Khúc liền mạch quanh neo, dài ~target ký tự (chuỗi con của plain)."""
+    """Khúc liền mạch quanh neo, dài ~target ký tự (chuỗi con của plain). anchor None → phần đầu bài (--fill)."""
     if len(plain) <= target:
         return plain.strip() or anchor
+    if anchor is None:
+        anchor = plain[:1]
     a = plain.find(anchor)
     if a < 0 or len(anchor) >= target:
         return anchor
@@ -51,8 +53,46 @@ def span(plain, anchor, target):
     return plain[lo:hi].strip()
 
 
+def grid(plain, anchor, target):
+    """--mode grid: khung cố định cắt liên tiếp từ đầu bài (target ký tự ≈ 512 token BTC), lấy khung chứa tâm của neo.
+    Giả thuyết (26/10, sau LB zh 710 ký tự thắng): đáp án là các khung ~512 token cắt từ đầu bài → khúc quanh neo thường
+    vắt qua hai khung. Bài ngắn hơn một khung → cả bài; không tìm thấy neo → khúc quanh neo như mode center."""
+    if len(plain) <= target:
+        return plain.strip() or anchor
+    a = plain.find(anchor) if anchor else 0
+    if a < 0:
+        return span(plain, anchor, target)
+    k = (a + len(anchor or "") // 2) // target
+    return plain[k * target:(k + 1) * target].strip()
+
+
+def anchor_table(src, dst):
+    """Tách neo (đoạn đầu tiên của mỗi tài liệu, theo thứ tự) từ bài nộp .json / .zip → parquet nhỏ (qid, doc_id, text).
+    Máy 6 GB RAM không đọc nổi nhiều bài nộp ~250 MB cùng lúc: chạy mỗi file một tiến trình (--extract)."""
+    import zipfile
+    import pyarrow as pa
+    if src.endswith(".zip"):
+        with zipfile.ZipFile(src) as z:
+            sub = json.loads(z.read(z.namelist()[0]).decode("utf-8"))
+    else:
+        sub = json.loads(Path(src).read_text("utf-8"))
+    qs, ds_, xs = [], [], []
+    for s in sub:
+        seen = set()
+        for c in s["relevant_chunks"]:
+            d = int(c["doc_id"])
+            if d not in seen:
+                seen.add(d)
+                qs.append(int(s["id"])); ds_.append(d); xs.append(c["chunk_text"])
+    pq.write_table(pa.table({"qid": pa.array(qs, pa.int64()), "doc_id": pa.array(ds_, pa.int64()), "text": xs}), dst)
+    print(f"{src} → {dst}: {len(qs)} neo")
+
+
 def main():
     config.stdout_utf8()
+    if len(sys.argv) == 4 and sys.argv[1] == "--extract":   # python tools/span_chunks.py --extract bai.json neo.parquet
+        anchor_table(sys.argv[2], sys.argv[3])
+        return
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--docs", required=True, help="bài nộp .json lấy nguyên danh sách tài liệu")
@@ -67,18 +107,33 @@ def main():
     ap.add_argument("--k-max", type=int, default=300)
     ap.add_argument("--target-vi", type=int, default=1900)
     ap.add_argument("--target-zh", type=int, default=420)
+    ap.add_argument("--mode", default="center", choices=["center", "grid"],
+                    help="center: mở đều quanh neo; grid: khung cố định từ đầu bài chứa tâm neo")
+    ap.add_argument("--fill", action="store_true",
+                    help="tài liệu trong --docs chưa có neo: bài ngắn hơn đích → cả bài, dài hơn → phần đầu bài")
     a = ap.parse_args()
     cfg = config.load(a.config)
     pm = runs.pubmed_ids(cfg)
     docs = {int(s["id"]): s["relevant_docs"] for s in json.loads(Path(a.docs).read_text("utf-8"))}
     anchors = {}
     for f in a.chunks:
+        if f.endswith(".parquet"):                            # neo đã tách sẵn (anchor_table) — ít RAM
+            t = pq.read_table(f).to_pydict()
+            for q, d, x in zip(t["qid"], t["doc_id"], t["text"]):
+                if d not in pm:
+                    anchors.setdefault(int(q), {}).setdefault(int(d), x)
+            continue
         for s in json.loads(Path(f).read_text("utf-8")):
             seen = anchors.setdefault(int(s["id"]), {})
             for c in s["relevant_chunks"]:
                 d = int(c["doc_id"])
                 if d not in pm and d not in seen:
                     seen[d] = c["chunk_text"]
+    if a.fill:                                                # tài liệu nộp chưa có neo → neo rỗng (phần đầu bài)
+        for q, dl in docs.items():
+            seen = anchors.setdefault(q, {})
+            for d in dl:
+                seen.setdefault(int(d), None)
     if a.order:                                               # hợp nhiều file → sắp lại theo thứ hạng tài liệu của run ens
         dr = runs.doc_ranking(runs.read(a.order, depth=1000), "max", cfg["rerank"]["top_n"])
         pos = {(int(q), int(d)): int(k) for q, d, k in zip(dr["qid"], dr["doc_id"], dr["drank"])}
@@ -94,18 +149,20 @@ def main():
     r = runs.read(a.probs, depth=cfg["rerank"]["top_n"])
     r = r[(r["score"] >= 0) & (r["score"] <= 1)]
     pdoc = r.groupby(["qid", "doc_id"])["score"].max()
-    cands, probs, stat = {}, {}, {"whole": 0, "span": 0, "anchor": 0, "miss": 0}
+    cands, probs, stat = {}, {}, {"whole": 0, "span": 0, "anchor": 0, "lead": 0, "miss": 0}
     for q, lst in anchors.items():
         items = []
         for d, anc in lst:
             p = plain.get(d)
             if p is None:
                 stat["miss"] += 1
+                if anc is None:
+                    continue
                 txt = anc
             else:
                 tgt = a.target_zh if lang.get(d) == "zh" else a.target_vi
-                txt = span(p, anc, tgt)
-                stat["whole" if txt == p.strip() else ("anchor" if txt == anc else "span")] += 1
+                txt = (grid if a.mode == "grid" else span)(p, anc, tgt)
+                stat["whole" if txt == p.strip() else ("lead" if anc is None else ("anchor" if txt == anc else "span"))] += 1
             items.append((d, d, txt))
         cands[q] = items
         if q in pdoc.index.get_level_values(0):
