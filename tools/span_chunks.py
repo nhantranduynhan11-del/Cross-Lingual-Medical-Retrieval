@@ -110,11 +110,13 @@ def main():
     ap.add_argument("--target-zh", type=int, default=420)
     ap.add_argument("--mode", default="center", choices=["center", "grid"],
                     help="center: mở đều quanh neo; grid: khung cố định từ đầu bài chứa tâm neo")
+    ap.add_argument("--keep-pubmed", action="store_true",
+                    help="giữ neo bài PubMed (bản nộp private: đáp án public làm khi kho chưa có PubMed)")
     ap.add_argument("--fill", action="store_true",
                     help="tài liệu trong --docs chưa có neo: bài ngắn hơn đích → cả bài, dài hơn → phần đầu bài")
     a = ap.parse_args()
     cfg = config.load(a.config)
-    pm = runs.pubmed_ids(cfg)
+    pm = set() if a.keep_pubmed else runs.pubmed_ids(cfg)
     docs = {int(s["id"]): s["relevant_docs"] for s in json.loads(Path(a.docs).read_text("utf-8"))}
     anchors = {}
     for f in a.chunks:
@@ -142,43 +144,56 @@ def main():
     else:
         anchors = {q: list(v.items()) for q, v in anchors.items()}   # (doc, neo) theo thứ tự ens
     need = sorted({d for v in anchors.values() for d, _ in v})
-    print(f"tài liệu cần chữ thuần: {len(need)}")
-    t = ds.dataset(str(cfg.path("corpus"))).to_table(columns=["id", "lang", "text"],
-                                                     filter=ds.field("id").isin(need)).to_pydict()
-    plain = {int(i): parse(x or "")[0] for i, x in zip(t["id"], t["text"])}
+    corpus = ds.dataset(str(cfg.path("corpus")))
+    t = corpus.to_table(columns=["id", "lang"], filter=ds.field("id").isin(need)).to_pydict()
     lang = dict(zip([int(i) for i in t["id"]], t["lang"]))
-    r = runs.read(a.probs, depth=cfg["rerank"]["top_n"])
+    # điểm P(yes): mọi đơn vị đã chấm (run gộp có thể > 400 đơn vị; phần đuôi có điểm âm nên bị lọc)
+    r = runs.read(a.probs)
     r = r[(r["score"] >= 0) & (r["score"] <= 1)]
     pdoc = r.groupby(["qid", "doc_id"])["score"].max()
-    cands, probs, stat = {}, {}, {"whole": 0, "span": 0, "anchor": 0, "lead": 0, "miss": 0}
-    for q, lst in anchors.items():
-        items = []
-        for d, anc in lst:
-            p = plain.get(d)
-            if p is None:
-                stat["miss"] += 1
-                if anc is None:
-                    continue
-                txt = anc
-            else:
-                tgt = a.target_zh if lang.get(d) == "zh" else a.target_vi
-                txt = (grid if a.mode == "grid" else span)(p, anc, tgt)
-                stat["whole" if txt == p.strip() else ("lead" if anc is None else ("anchor" if txt == anc else "span"))] += 1
-            items.append((d, d, txt))
-        cands[q] = items
+    cands, probs = {}, {}
+    for q, lst in anchors.items():                            # phân bổ chỉ cần doc_id + P(yes), chưa cần chữ
+        cands[q] = [(d, d, anc) for d, anc in lst if d in lang or anc is not None]
         if q in pdoc.index.get_level_values(0):
             pq_ = pdoc.loc[q]
-            pu = {d: float(pq_.get(d, 0.0)) for d, _, _ in items}
+            pu = {d: float(pq_.get(d, 0.0)) for d, _, _ in cands[q]}
             probs[q] = (pu, float(pq_.sum()))
-    tot = sum(stat.values())
-    print("khúc: " + ", ".join(f"{k} {v / tot:.0%}" for k, v in stat.items()))
     ks = submit.allocate(cands, probs, a.per_query, a.k_min, a.k_max)
+    sel = {}                                                  # doc → [(qid, vị trí, neo)] chỉ các khúc được chọn
+    for q, items in cands.items():
+        for i, (d, _, anc) in enumerate(items[:ks.get(q, 0)]):
+            sel.setdefault(d, []).append((q, i, anc))
+    print(f"tài liệu cần chữ thuần: {len(sel)} (trong {len(need)} tài liệu có neo)")
+    text, stat, bad = {}, {"whole": 0, "span": 0, "anchor": 0, "lead": 0, "miss": 0}, []
+    ids = sorted(sel)
+    for b in range(0, len(ids), 20000):                       # đọc theo lô: máy 6 GB RAM không giữ nổi mọi bài
+        tb = corpus.to_table(columns=["id", "text"], filter=ds.field("id").isin(ids[b:b + 20000])).to_pydict()
+        for i, x in zip(tb["id"], tb["text"]):
+            p = parse(x or "")[0]
+            d = int(i)
+            tgt = a.target_zh if lang.get(d) == "zh" else a.target_vi
+            for q, k, anc in sel[d]:
+                txt = (grid if a.mode == "grid" else span)(p, anc, tgt)
+                if not txt or txt not in p:
+                    bad.append((q, d))
+                stat["whole" if txt == p.strip() else ("lead" if anc is None else ("anchor" if txt == anc else "span"))] += 1
+                text[(q, k)] = txt
+    for d, lst in sel.items():                                # không có trong kho → giữ neo nguyên văn
+        for q, k, anc in lst:
+            if (q, k) not in text:
+                stat["miss"] += 1
+                text[(q, k)] = anc
+    if bad:
+        raise SystemExit(f"LỖI: {len(bad)} khúc không phải chuỗi con của bài, vd {bad[:5]}")
+    tot = sum(stat.values())
+    print("khúc được chọn: " + ", ".join(f"{k} {v / tot:.0%}" for k, v in stat.items()))
     qids = [int(x) for x in pq.read_table(cfg.path("queries"), columns=["id"]).column("id").to_pylist()]
     sub = [{"id": q, "relevant_docs": docs.get(q, []),
-            "relevant_chunks": [{"doc_id": d, "chunk_text": x} for d, _, x in cands.get(q, [])[:ks.get(q, 0)]]}
+            "relevant_chunks": [{"doc_id": d, "chunk_text": text[(q, i)]}
+                                for i, (d, _, _) in enumerate(cands.get(q, [])[:ks.get(q, 0)])]}
            for q in qids]
     link_ids = set(pq.read_table(cfg.path("links"), columns=["id"]).column("id").to_pylist())
-    errs = submit.validate(sub, qids, link_ids, {d: plain[d] for d in plain})
+    errs = submit.validate(sub, qids, link_ids)
     if errs:
         raise SystemExit(f"LỖI ({len(errs)}): {errs[:5]}")
     ln = [len(c["chunk_text"]) for s in sub for c in s["relevant_chunks"]]
