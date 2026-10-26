@@ -210,11 +210,12 @@ def rerank(cfg, df, method, device, log=print):
 
 
 def reuse_scores(paths, top_n, qids):
-    """Điểm reranker đã có: {(qid, unit_id): score} từ các run đã rerank bằng CÙNG phương pháp (phần top-N; bỏ phần đuôi
-    với_tail có điểm -(hạng + 100000)). Điểm của một cặp không phụ thuộc ứng viên khác → dùng lại đúng như chấm lại."""
+    """Điểm reranker đã có: {(qid, unit_id): score} từ các run đã rerank bằng CÙNG phương pháp (mọi cặp đã chấm, kể cả run
+    rerank sâu hơn top_n như lin07_cross800; bỏ phần đuôi with_tail có điểm -(hạng + 100000)). Điểm của một cặp không phụ
+    thuộc ứng viên khác → dùng lại đúng như chấm lại."""
     parts = []
     for p in paths:
-        r = runs.read(p, depth=top_n, qids=qids)
+        r = runs.read(p, qids=qids)
         parts.append(r[r["score"] > -1e4][["qid", "unit_id", "score"]])
     c = pd.concat(parts, ignore_index=True).drop_duplicates(["qid", "unit_id"])
     return c.set_index(["qid", "unit_id"])["score"]

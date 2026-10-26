@@ -111,6 +111,11 @@ fuse:
     lin07np: {linear: 0.7, exclude: pubmed, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, zh_dense, zh_lsr, zh_bm25]}
     # Q2D bổ sung (không thay thế) vào fusion tuyến tính: 9 nhánh gốc + 9 nhánh q2d cùng trọng số, α = 0,7 (đăng ký trước)
     lin07q: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, q2d_vi_dense, q2d_vi_lsr, q2d_vi_bm25, q2d_en_dense, "q2d_en_lsr*0.5", "q2d_en_bm25*0.5", q2d_zh_dense, q2d_zh_lsr, q2d_zh_bm25]}
+    # mE5-large (C, runs_e5: e5_<lang>_dense@parents/@children) — 26/10, công thức lin07 giữ nguyên, chỉ đổi nhóm dense:
+    # lin07e5r = thay 3 nhánh dense bge-m3 bằng e5; lin12 = 6 nhánh dense (bge-m3 + e5) cùng trọng số. Kiểm trên LB (bge
+    # top-400, cùng điều kiện lin07_cross): doc F2 so với 0,2480, đạt nếu ≥ 0,2520. Cần các file e5 cùng thư mục runs.
+    lin07e5r: {linear: 0.7, runs: [e5_vi_dense, vi_lsr, vi_bm25, e5_en_dense, "en_lsr*0.5", "en_bm25*0.5", e5_zh_dense, zh_lsr, zh_bm25]}
+    lin12: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, e5_vi_dense, e5_en_dense, e5_zh_dense]}
 
 rerank:
   method: cross                          # BASELINE: cross (bge-reranker-v2-m3; hơn rrf9 có ý nghĩa, cùng dấu 2 nửa) | colbert

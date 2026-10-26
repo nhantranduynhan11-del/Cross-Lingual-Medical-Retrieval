@@ -237,7 +237,7 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
 **Thử trên bộ nhãn:** thêm file danh sách câu (vd `queries.csv`) làm Input, đặt `QIDS = 'queries.csv'` → chỉ rerank các câu
 đó, ra `runs/<run>_<method>_sub.parquet`, không tạo bài nộp. bge top-400 ~6 s/câu/GPU (đo 19/10).
 """),
-    setup_cell("k5-v9", "RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
+    setup_cell("k5-v10","RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
                         "METHODS = ['cross']                  # thêm 'colbert' nếu muốn so sánh; [] = chỉ nộp RUN có sẵn\n"
                         "TOP_N = 400\nK_DOC, K_CHUNK = 200, 185\n"
                         "QIDS = ''                            # thử trên bộ nhãn: 'queries.csv' (tìm trong /kaggle/input) "
@@ -251,8 +251,9 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                         "CHUNK_CALIB = ''                     # hiệu chỉnh P(yes) theo 'precision,recall' đoạn trên LB của bài "
                         "185 đoạn (vd '0.0525,0.1555') → bài _cbudcal\n"
                         "CALIB_QIDS = 'public600_qids.txt'   # câu LB đã chấm (Input) để khớp hiệu chỉnh\n"
-                        "REUSE = {}                           # dùng lại điểm đã chấm: {phương pháp: run trong Input}, vd "
-                        "{'cross': 'lin07_cross', 'qwen3i': 'lin07_qwen3i_1200'} → chỉ chấm đoạn mới\n"
+                        "REUSE = {}                           # dùng lại điểm đã chấm: {phương pháp: run hoặc [các run] trong "
+                        "Input}, vd {'cross': ['lin07_cross', 'lin12_07_cross'], 'qwen3i': 'lin07_qwen3i_1200'} → chỉ chấm "
+                        "đoạn mới\n"
                         "ENSEMBLE = False                     # True + METHODS có 'cross' và 'qwen3i' → thêm run <RUN>_ensi\n"
                         "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)",
                "('chunks', 'qtrans')"),
@@ -292,7 +293,8 @@ DEPTH = '' if TOP_N == 400 else str(TOP_N)           # TOP_N khác 400 → tên 
 sfx = '_sub' if QIDS else ''
 TAG = lambda m: f'{RUN}_{m}{DEPTH}{sfx}'
 for m in METHODS:
-    RA = f' --reuse {run_path(REUSE[m])}' if m in REUSE else ''
+    RU = REUSE.get(m) or []
+    RA = ' --reuse ' + ' '.join(run_path(x) for x in ([RU] if isinstance(RU, str) else RU)) if RU else ''
     par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.rerank --config {K.cfg} --run {RUNS_IN}/{RUN}.parquet '
          f'--method {m} --top-n {TOP_N} --shard {g}/2 --device cuda:0 --out {OUT} --name {TAG(m)}{QARG}{RA}'
          for g in range(2)], f'rerank_{m}')

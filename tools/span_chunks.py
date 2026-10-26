@@ -56,7 +56,8 @@ def span(plain, anchor, target):
 def grid(plain, anchor, target):
     """--mode grid: khung cố định cắt liên tiếp từ đầu bài (target ký tự ≈ 512 token BTC), lấy khung chứa tâm của neo.
     Giả thuyết (26/10, sau LB zh 710 ký tự thắng): đáp án là các khung ~512 token cắt từ đầu bài → khúc quanh neo thường
-    vắt qua hai khung. Bài ngắn hơn một khung → cả bài; không tìm thấy neo → khúc quanh neo như mode center."""
+    vắt qua hai khung. Bài ngắn hơn một khung → cả bài; không tìm thấy neo → khúc quanh neo như mode center.
+    LB 26/10: final1200_grid chunk F2 0,1846 < center 0,1928 (P và R đều giảm) → giả thuyết sai, không dùng."""
     if len(plain) <= target:
         return plain.strip() or anchor
     a = plain.find(anchor) if anchor else 0
