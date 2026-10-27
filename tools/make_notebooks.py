@@ -692,7 +692,7 @@ chỉ dùng lúc huấn luyện) viết mỗi đoạn một câu hỏi tiếng V
 **`mir2-synth`** → k7 (`MODES = ['synth']`, `FUSED = ['synth_lin07']`, `RERANK = False`) → k8b.
 {VLLM_NOTE}
 """),
-    setup_cell("k8a-v2", "N = 'vi:1400,zh:900,en:700'           # số đoạn nguồn mỗi ngôn ngữ\n"
+    setup_cell("k8a-v3", "N = 'vi:2600,zh:1100,en:1000'        # số đoạn nguồn mỗi ngôn ngữ (dư: đoạn không phải y khoa bị bỏ qua)\n"
                          "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
                          "LIMIT = 100                          # >0: chỉ N đoạn đầu (chạy thử); 0 = tất cả\n"
                          "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks',)"),

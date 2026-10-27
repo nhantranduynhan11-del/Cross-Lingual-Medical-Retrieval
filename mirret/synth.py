@@ -40,12 +40,17 @@ trả lời được câu hỏi.
 Yêu cầu:
 - Tự nhiên như người thật hỏi: có thể kể ngắn hoàn cảnh (tuổi, triệu chứng, thuốc đang dùng) rồi hỏi; 10–60 từ.
 - Hỏi về nội dung chính của đoạn, không hỏi chi tiết vụn vặt; không chép nguyên tiêu đề; không nhắc "đoạn văn", "bài viết".
+- Câu tiếng Việt chỉ dùng tiếng Việt (tên thuốc, thuật ngữ quốc tế viết bằng chữ Latinh), không chèn chữ Hán.
+BỎ QUA đoạn (trả về {"skip": true}) nếu người bệnh / người nhà sẽ không tìm đọc nó để giải đáp thắc mắc sức khoẻ: tin thời \
+sự, chính trị, xã hội, thể thao, giải trí; tin về sự kiện, số liệu trong ngày, nhân sự, chính sách; quảng cáo; nghiên cứu \
+trên động vật hoặc tế bào, thí nghiệm quá chuyên sâu mà bệnh nhân không hỏi tới.
 Ví dụ về văn phong (không liên quan đến đoạn được đưa):
 1. Bé nhà em 2 tuổi bị sốt 39 độ kèm phát ban đỏ ở bụng, có cần đưa đi viện ngay không?
 2. Người bị tiểu đường type 2 có ăn được chuối không, ăn bao nhiêu là đủ?
 3. Tôi uống thuốc tránh thai khẩn cấp xong bị chậm kinh 1 tuần thì có sao không?
 4. Ung thư gan giai đoạn đầu có những phương pháp điều trị nào?
-Trả về đúng một dòng JSON: {"vi": "<câu hỏi tiếng Việt>", "en": "<bản dịch tiếng Anh>", "zh": "<bản dịch tiếng Trung giản thể>"}"""
+Trả về đúng một dòng JSON: {"vi": "<câu hỏi tiếng Việt>", "en": "<bản dịch tiếng Anh>", "zh": "<bản dịch tiếng Trung giản thể>"} \
+hoặc {"skip": true}"""
 GEN_PROMPT = """Đoạn tài liệu ({lang}):
 Tiêu đề: {ctx}
 Nội dung: {text}"""
@@ -127,11 +132,15 @@ def parse_gen(raw):
         j = json.loads(m.group(0))
     except json.JSONDecodeError:
         return None, "JSON hỏng"
+    if j.get("skip"):
+        return None, "bỏ qua (không phải câu hỏi sức khoẻ)"
     vi, en, zh = (str(j.get(k, "")).strip() for k in ("vi", "en", "zh"))
     if not (vi and en and zh):
         return None, "thiếu ngôn ngữ"
     if not re.search(r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", vi.lower()):
         return None, "vi không có dấu tiếng Việt"
+    if re.search(r"[぀-ヿ一-鿿]", vi):
+        return None, "vi có chữ Hán"
     if not re.search(r"[一-鿿]", zh):
         return None, "zh không có chữ Hán"
     if not 6 <= len(vi.split()) <= 90:
@@ -161,6 +170,9 @@ def cmd_generate(cfg, model, tp, limit=0, log=print):
                                 "q": q, "why": why, "raw": raw}, ensure_ascii=False) + "\n")
     ntok = sum(len(o.prompt_token_ids) + len(o.outputs[0].token_ids) for o in outs)
     log(f"→ {d / 'gen.jsonl'}: {ok}/{len(src)} hợp lệ, {dt:.0f}s ({ntok / dt:.0f} token/s)")
+    rows = [json.loads(x) for x in (d / "gen.jsonl").read_text("utf-8").splitlines() if x.strip()]
+    st = pd.DataFrame([(r["lang"], r["why"] or "hợp lệ") for r in rows], columns=["lang", "why"])
+    log(st.groupby(["lang", "why"]).size().unstack(fill_value=0).to_string())
 
 
 def cmd_build(cfg, log=print):
@@ -273,7 +285,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["sample", "generate", "build", "candidates", "label"])
     ap.add_argument("--config", default=None)
-    ap.add_argument("--n", default="vi:1400,zh:900,en:700", help="sample: số đoạn nguồn mỗi ngôn ngữ")
+    ap.add_argument("--n", default="vi:2600,zh:1100,en:1000",
+                    help="sample: số đoạn nguồn mỗi ngôn ngữ (dư để bù đoạn bị bỏ qua: vi nhiều tin thời sự)")
     ap.add_argument("--model", default="Qwen/Qwen3-32B-AWQ")
     ap.add_argument("--tp", type=int, default=2, help="tensor parallel (số GPU)")
     ap.add_argument("--limit", type=int, default=0, help="chỉ N mục / N câu đầu (đo tốc độ)")
