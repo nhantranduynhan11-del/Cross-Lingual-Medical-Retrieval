@@ -666,8 +666,20 @@ report('k9')
 ])
 
 # ---------------------------------------------------------------- k8: dữ liệu fine-tune reranker (GPU, vLLM)
-VLLM_NOTE = """**vLLM trên T4:** cài ở ô (2) (`VLLM_SPEC`, mặc định bản mới nhất). Lỗi khi nạp model → thử `VLLM_SPEC =
-'vllm==0.9.2'` (hoặc bản cũ hơn có Qwen3), hoặc `MODEL = 'Qwen/Qwen3-14B-AWQ'` (nhanh ~2 lần, chất lượng thấp hơn)."""
+VLLM_NOTE = """**vLLM trên T4:** `VLLM_SPEC` ghim bản dùng PyTorch CUDA 12.x như Kaggle (bản vLLM mới nhất kéo PyTorch CUDA
+13 → lệch torchaudio của Kaggle và cần driver ≥ 580). Ô cài đặt gỡ torchaudio (không dùng) và dừng nếu torch mới không
+thấy GPU. Lỗi khi nạp model → thử `VLLM_SPEC = 'vllm==0.11.0'`, hoặc `MODEL = 'Qwen/Qwen3-14B-AWQ'` (nhanh ~2 lần, chất
+lượng thấp hơn)."""
+VLLM_INSTALL = """
+sh('nvidia-smi --query-gpu=name,driver_version --format=csv,noheader')
+sh(f'python -m pip install -q "{VLLM_SPEC}"', 'pip_vllm')
+sh('python -m pip uninstall -y -q torchaudio')       # vLLM thay torch của Kaggle; torchaudio cũ lệch CUDA, không dùng tới
+sh('python -c "import torch, vllm; print(vllm.__version__, torch.__version__, torch.version.cuda, torch.cuda.is_available())"')
+try:
+    sh('python -c "import sys, torch; sys.exit(0 if torch.cuda.is_available() else 3)"')
+except Exception:
+    raise SystemExit('torch mới không thấy GPU (driver Kaggle không hỗ trợ CUDA của bản torch này) → đổi VLLM_SPEC')
+"""
 save("k8a_synth.ipynb", [
     md(f"""
 # k8a — Câu hỏi tổng hợp cho fine-tune reranker (GPU T4 ×2, vLLM)
@@ -680,15 +692,12 @@ chỉ dùng lúc huấn luyện) viết mỗi đoạn một câu hỏi tiếng V
 **`mir2-synth`** → k7 (`MODES = ['synth']`, `FUSED = ['synth_lin07']`, `RERANK = False`) → k8b.
 {VLLM_NOTE}
 """),
-    setup_cell("k8a-v1", "N = 'vi:1400,zh:900,en:700'           # số đoạn nguồn mỗi ngôn ngữ\n"
+    setup_cell("k8a-v2", "N = 'vi:1400,zh:900,en:700'           # số đoạn nguồn mỗi ngôn ngữ\n"
                          "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
                          "LIMIT = 100                          # >0: chỉ N đoạn đầu (chạy thử); 0 = tất cả\n"
-                         "VLLM_SPEC = 'vllm'", "('chunks',)"),
+                         "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks',)"),
     code('''
-# (2) vLLM + đoạn nguồn (CPU)
-sh(f'python -m pip install -q "{VLLM_SPEC}"', 'pip_vllm')
-sh('python -c "import vllm, torch; print(vllm.__version__, torch.__version__)"')
-sh(f'python -m mirret.synth sample --config {K.cfg} --n {N}', 'sample')
+# (2) vLLM + đoạn nguồn (CPU)''' + VLLM_INSTALL + '''sh(f'python -m mirret.synth sample --config {K.cfg} --n {N}', 'sample')
 '''),
     code('''
 # (3) Sinh câu hỏi (2 GPU, tensor parallel) → câu hỏi cho k7
@@ -714,11 +723,11 @@ xác suất từng mức từ logprob → nhãn mềm.
 **Đầu ra:** `synth/pairs.parquet`, `synth/labels-<phần>.parquet` → *New Dataset* **`mir2-labels-<phần>`** → k8c.
 {VLLM_NOTE}
 """),
-    setup_cell("k8b-v1", "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
+    setup_cell("k8b-v2", "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
                          "TOP, FAR = 12, 4\n"
                          "SHARD = '0/1'\n"
                          "LIMIT = 30                           # >0: chỉ N câu đầu của phần (đo tốc độ); 0 = cả phần\n"
-                         "VLLM_SPEC = 'vllm'", "('chunks',)"),
+                         "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks',)"),
     code('''
 # (2) Dữ liệu k8a + run gộp của k7 → ứng viên (CPU)
 for d in locate_all('synth/source.parquet'):
@@ -730,9 +739,7 @@ print('run:', RUN)
 sh(f'python -m mirret.synth candidates --config {K.cfg} --run {RUN} --top {TOP} --far {FAR}', 'candidates')
 '''),
     code('''
-# (3) Teacher chấm (2 GPU, tensor parallel)
-sh(f'python -m pip install -q "{VLLM_SPEC}"', 'pip_vllm')
-lim = f' --limit {LIMIT}' if LIMIT else ''
+# (3) Teacher chấm (2 GPU, tensor parallel)''' + VLLM_INSTALL + '''lim = f' --limit {LIMIT}' if LIMIT else ''
 sh(f'python -m mirret.synth label --config {K.cfg} --model {MODEL} --tp 2 --shard {SHARD}{lim}', 'label')
 report('k8b')
 '''),
