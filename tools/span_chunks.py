@@ -166,8 +166,8 @@ def main():
     print(f"tài liệu cần chữ thuần: {len(sel)} (trong {len(need)} tài liệu có neo)")
     text, stat, bad = {}, {"whole": 0, "span": 0, "anchor": 0, "lead": 0, "miss": 0}, []
     ids = sorted(sel)
-    for b in range(0, len(ids), 20000):                       # đọc theo lô: máy 6 GB RAM không giữ nổi mọi bài
-        tb = corpus.to_table(columns=["id", "text"], filter=ds.field("id").isin(ids[b:b + 20000])).to_pydict()
+    for b in range(0, len(ids), 5000):                        # đọc theo lô: máy 6 GB RAM không giữ nổi mọi bài
+        tb = corpus.to_table(columns=["id", "text"], filter=ds.field("id").isin(ids[b:b + 5000])).to_pydict()
         for i, x in zip(tb["id"], tb["text"]):
             p = parse(x or "")[0]
             d = int(i)

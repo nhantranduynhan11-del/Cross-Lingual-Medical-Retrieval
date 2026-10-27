@@ -597,3 +597,50 @@ print('run gửi chấm:', sorted(os.path.basename(f) for f in glob.glob(f'{RUNS
 report('k7')
 '''),
 ])
+
+# ---------------------------------------------------------------- k9: nhánh MedCPT cho PubMed (GPU)
+save("k9_medcpt.ipynb", [
+    md("""
+# k9 — Nhánh MedCPT cho tài liệu tiếng Anh / PubMed (GPU T4 ×2)
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
+**Add Input:** `mir2-code`, `mir2-data`, `mir2-chunks` (đoạn cha), `mir2-runs` (9 nhánh + `qtrans/queries_en.parquet`).
+MedCPT (NCBI 2023, BERT-base, mở): `ncbi/MedCPT-Article-Encoder` mã hoá ~240 nghìn bài PubMed dạng [tiêu đề, tóm tắt],
+`ncbi/MedCPT-Query-Encoder` mã hoá câu hỏi tiếng Anh (bản dịch) → top-1.000 → `runs/medcpt_en_dense.parquet`, rồi gộp
+`FUSE` (fuse.configs: lin07m = lin07 + MedCPT; lin07um = lin07u + MedCPT). Ước tính ~20–30 phút.
+**Đầu ra:** tab *Output* → *New Dataset* **`mir2-medcpt`** → k5 với `RUN = 'lin07m'` (rerank, `REUSE` điểm cũ).
+Đáp án public không có PubMed → kiểm ở vòng private (1–4/11).
+"""),
+    setup_cell("k9-v1", "FUSE = ['lin07m', 'lin07um']             # fuse.configs có nhánh medcpt_en_dense",
+               "('chunks', 'qtrans')"),
+    code('''
+# (2) Mã hoá đoạn cha tiếng Anh: mỗi GPU một nửa
+par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.medcpt encode --config {K.cfg} --shard {g}/2 --device cuda:0'
+     for g in range(2)], 'medcpt_encode')
+'''),
+    code('''
+# (3) Tìm top-1.000 bằng câu hỏi tiếng Anh → runs/medcpt_en_dense; chép 9 nhánh (@parents/@children) rồi gộp FUSE
+OUT = f'{K.work}/runs'
+os.makedirs(OUT, exist_ok=True)
+RUNS_IN = locate('runs/vi_dense.parquet') / 'runs'
+copied = []
+for f in glob.glob(f'{RUNS_IN}/*.parquet'):
+    dst = f'{OUT}/' + os.path.basename(f)
+    if not os.path.exists(dst):
+        shutil.copy(f, dst); copied.append(dst)
+K.set({'retrieve.out_dir': OUT})
+sh(f'python -m mirret.medcpt search --config {K.cfg} --device cuda:0', 'medcpt_search')
+sh(f'python -m mirret.fuse --config {K.cfg} --only {",".join(FUSE)}', 'fuse')
+keep = {f'{OUT}/{n}.parquet' for n in ['vi_dense', 'vi_lsr', 'vi_bm25', 'en_dense', 'en_lsr', 'en_bm25', 'zh_dense',
+                                        'zh_lsr', 'zh_bm25']}
+for f in copied:                                      # giữ 9 nhánh gộp mức (k5 cần runs/vi_dense.parquet để định vị)
+    if f not in keep:
+        os.remove(f)
+from mirret import config as C, runs as R
+pm = R.pubmed_ids(C.load(K.cfg))
+for n in ['medcpt_en_dense', 'en_dense'] + FUSE:
+    r = R.read(f'{OUT}/{n}.parquet', depth=400)
+    print(f'{n:18s} top-400: PubMed {r["doc_id"].isin(pm).mean():.1%}')
+report('k9')
+'''),
+])

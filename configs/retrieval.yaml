@@ -116,6 +116,20 @@ fuse:
     # top-400, cùng điều kiện lin07_cross): doc F2 so với 0,2480, đạt nếu ≥ 0,2520. Cần các file e5 cùng thư mục runs.
     lin07e5r: {linear: 0.7, runs: [e5_vi_dense, vi_lsr, vi_bm25, e5_en_dense, "en_lsr*0.5", "en_bm25*0.5", e5_zh_dense, zh_lsr, zh_bm25]}
     lin12: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, e5_vi_dense, e5_en_dense, e5_zh_dense]}
+    # LB 26/10: lin07e5r_cross doc F2 0,1942, lin12_cross 0,2411 < lin07_cross 0,2480 → KHÔNG dùng e5
+    # MedCPT (mirret/medcpt.py, 27/10): thêm nhánh dense cho PubMed vào lin07 (lin07m) / lin07u (lin07um, en ×1). Đáp án
+    # public không có PubMed → chỉ kiểm được ở vòng private (1–4/11, đáp án làm lại có PubMed).
+    lin07m: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, medcpt_en_dense]}
+    lin07um: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, en_lsr, en_bm25, zh_dense, zh_lsr, zh_bm25, medcpt_en_dense]}
+
+medcpt:                                  # nhánh PubMed bằng MedCPT (mirret/medcpt.py), câu hỏi = bản dịch tiếng Anh
+  article_model: "ncbi/MedCPT-Article-Encoder"
+  query_model: "ncbi/MedCPT-Query-Encoder"
+  max_length: 512                        # cặp [tiêu đề, tóm tắt] như thẻ mô hình
+  query_max_length: 64
+  batch: 64
+  depth: 1000
+  out_dir: "emb_medcpt"
 
 rerank:
   method: cross                          # BASELINE: cross (bge-reranker-v2-m3; hơn rrf9 có ý nghĩa, cùng dấu 2 nửa) | colbert
