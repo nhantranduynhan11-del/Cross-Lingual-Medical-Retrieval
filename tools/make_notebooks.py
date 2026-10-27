@@ -690,19 +690,28 @@ chỉ dùng lúc huấn luyện) viết mỗi đoạn một câu hỏi tiếng V
 **Chạy thử trước:** `LIMIT = 100` → đọc `samples.md` + tốc độ (token/s) ở log, rồi `LIMIT = 0`.
 **Đầu ra:** `synth/source.parquet`, `synth/gen.jsonl`, `qexp/synth/queries_{{vi,en,zh}}.parquet` → *New Dataset*
 **`mir2-synth`** → k7 (`MODES = ['synth']`, `FUSED = ['synth_lin07']`, `RERANK = False`) → k8b.
+**Đợt bổ sung (vd PubMed, 27/10):** Add Input thêm `mir2-synth` cũ, `TAG = 'pm'`, `N = 'en:2000'` → chỉ sinh phần mới
+(`source_pm.parquet`, `gen_pm.jsonl`, không trùng tài liệu / id đợt trước), `qexp/synth` dựng lại từ MỌI đợt → output này
+thay `mir2-synth` cũ.
 {VLLM_NOTE}
 """),
-    setup_cell("k8a-v3", "N = 'vi:3000,zh:1300,en:1600'        # dư vì bị bỏ qua: hợp lệ ~vi 42%, zh 59%, en 33% → ~2.500 câu\n"
+    setup_cell("k8a-v4", "N = 'vi:3000,zh:1300,en:1600'        # dư vì bị bỏ qua: hợp lệ ~vi 51%, zh 74%, en 20% (prompt cũ)\n"
+                         "TAG = ''                             # '' = đợt đầu; 'pm' = đợt bổ sung (Add Input mir2-synth cũ)\n"
                          "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
                          "LIMIT = 100                          # >0: chỉ N đoạn đầu (chạy thử); 0 = tất cả\n"
                          "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks',)"),
     code('''
-# (2) vLLM + đoạn nguồn (CPU)''' + VLLM_INSTALL + '''sh(f'python -m mirret.synth sample --config {K.cfg} --n {N}', 'sample')
+# (2) vLLM + đoạn nguồn (CPU); đợt bổ sung: chép các đợt trước từ Input''' + VLLM_INSTALL + '''for d in (locate_all('synth/gen.jsonl') if TAG else []):
+    shutil.copytree(f'{d}/synth', f'{K.work}/synth', dirs_exist_ok=True)
+    print('đợt trước:', d, sorted(os.listdir(f'{d}/synth')))
+assert not TAG or os.path.exists(f'{K.work}/synth/gen.jsonl'), 'TAG đợt bổ sung: Add Input mir2-synth (đợt đầu)'
+TG = f' --tag {TAG}' if TAG else ''
+sh(f'python -m mirret.synth sample --config {K.cfg} --n {N}{TG}', 'sample')
 '''),
     code('''
-# (3) Sinh câu hỏi (2 GPU, tensor parallel) → câu hỏi cho k7
+# (3) Sinh câu hỏi (2 GPU, tensor parallel) → câu hỏi cho k7 (gộp mọi đợt)
 lim = f' --limit {LIMIT}' if LIMIT else ''
-sh(f'python -m mirret.synth generate --config {K.cfg} --model {MODEL} --tp 2{lim}', 'generate')
+sh(f'python -m mirret.synth generate --config {K.cfg} --model {MODEL} --tp 2{lim}{TG}', 'generate')
 sh(f'python -m mirret.synth build --config {K.cfg}', 'build')
 print(open(f'{K.work}/qexp/synth/samples.md', encoding='utf-8').read())
 report('k8a')

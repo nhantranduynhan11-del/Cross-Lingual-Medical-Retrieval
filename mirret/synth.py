@@ -22,6 +22,7 @@ import argparse
 import json
 import re
 import time
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +52,29 @@ Ví dụ về văn phong (không liên quan đến đoạn được đưa):
 4. Ung thư gan giai đoạn đầu có những phương pháp điều trị nào?
 Trả về đúng một dòng JSON: {"vi": "<câu hỏi tiếng Việt>", "en": "<bản dịch tiếng Anh>", "zh": "<bản dịch tiếng Trung giản thể>"} \
 hoặc {"skip": true}"""
+# PubMed (en): bản chung ở trên bỏ ~80% bài PubMed vì "nghiên cứu quá chuyên sâu" (k8a 27/10: 326/1.600 hợp lệ) dù
+# phần lớn là bài lâm sàng (chỉ ~4% tiêu đề là nghiên cứu động vật / tế bào) → prompt riêng: chuyển kết luận lâm sàng
+# thành câu hỏi người dùng, chỉ bỏ bài không về sức khoẻ con người. Ví dụ dựng từ tiêu đề bài trong kho (không phải câu thi).
+GEN_SYSTEM_PM = """Bạn tạo dữ liệu huấn luyện cho công cụ tìm kiếm y khoa tiếng Việt. Mỗi đoạn được đưa là tóm tắt một bài \
+báo y khoa (PubMed, tiếng Anh). Hãy viết MỘT câu hỏi bằng lời thường mà người dùng Việt Nam (bệnh nhân, người nhà, người \
+quan tâm sức khoẻ) có thể hỏi về bệnh, triệu chứng, thuốc, phương pháp điều trị, phẫu thuật hay xét nghiệm mà bài nói \
+tới, sao cho bài giúp trả lời câu hỏi đó.
+Yêu cầu:
+- Nghiên cứu lâm sàng, so sánh điều trị, ca bệnh, tổng quan đều dùng được: hỏi về kết luận thực tế (có hiệu quả không, \
+có an toàn không, nguy cơ gì, điều trị thế nào, ai nên làm); 10–60 từ; không dùng thuật ngữ thống kê.
+- Tên bệnh, thuốc, kỹ thuật giữ thuật ngữ quốc tế viết bằng chữ Latinh nếu cần; câu tiếng Việt không chèn chữ Hán.
+CHỈ BỎ QUA (trả về {"skip": true}) nếu bài nghiên cứu trên động vật, tế bào, vi khuẩn hay thực vật; thuần kỹ thuật phòng \
+thí nghiệm hoặc phương pháp thống kê; hoặc không liên quan sức khoẻ con người.
+Ví dụ (không liên quan đến đoạn được đưa):
+1. Châm kim khô có giảm đau lưng mạn tính tốt hơn tập vật lý trị liệu không?
+2. Bà bầu có được làm thủ thuật nút động mạch tử cung không, có ảnh hưởng thai nhi không?
+3. Ông tôi 92 tuổi mổ đục thuỷ tinh thể có an toàn không?
+4. Uống vitamin E và C có giúp cơ bắp đỡ mệt sau khi tập thể thao không?
+Trả về đúng một dòng JSON: {"vi": "<câu hỏi tiếng Việt>", "en": "<bản dịch tiếng Anh>", "zh": "<bản dịch tiếng Trung giản thể>"} \
+hoặc {"skip": true}"""
+ANIMAL = (r"\b(?:rats?|mice|mouse|murine|rabbits?|pigs?|piglets?|porcine|bovine|cows?|cattle|canine|dogs?|cats?|feline|"
+          r"chickens?|chick|avian|sheep|ovine|goats?|horses?|equine|zebrafish|drosophila|monkeys?|primates?|rodents?|"
+          r"hamsters?|in vitro|cell lines?|cultured cells|yeast|plants?)\b")
 GEN_PROMPT = """Đoạn tài liệu ({lang}):
 Tiêu đề: {ctx}
 Nội dung: {text}"""
@@ -84,15 +108,25 @@ def cut(text, lang, n_vi=1800, n_zh=900):
 
 
 # ---------------------------------------------------------------- k8a
-def cmd_sample(cfg, n_spec, seed=42, log=print):
-    """Đoạn nguồn: mỗi ngôn ngữ n tài liệu ngẫu nhiên (bỏ bản trùng, bài rỗng / quá ngắn), mỗi tài liệu 1 đoạn cha ≥ 100
-    token chọn ngẫu nhiên."""
+def suffix(tag):
+    return f"_{tag}" if tag else ""
+
+
+def cmd_sample(cfg, n_spec, tag="", seed=42, log=print):
+    """Đoạn nguồn: mỗi ngôn ngữ n tài liệu ngẫu nhiên (bỏ bản trùng, bài rỗng / quá ngắn; PubMed bỏ tiêu đề nghiên cứu
+    động vật / tế bào), mỗi tài liệu 1 đoạn cha ≥ 100 token chọn ngẫu nhiên. --tag: đợt bổ sung (source_<tag>.parquet,
+    id riêng, không trùng tài liệu các đợt trước)."""
     want = {k: int(v) for k, v in (x.split(":") for x in n_spec.split(","))}
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed + (zlib.crc32(tag.encode()) % 1000 if tag else 0))
     meta = ds.dataset(str(cfg.path("corpus"))).to_table(
-        columns=["id", "lang", "doc_type", "n_chars", "dup_of", "status"]).to_pandas()
+        columns=["id", "lang", "doc_type", "n_chars", "dup_of", "status", "title"]).to_pandas()
     meta = meta[(meta["status"] == "ok") & meta["dup_of"].isna() & meta["n_chars"].between(300, 20000)]
     meta = meta[meta["doc_type"].isin(["knowledge", "news", "qa", "paper"])]
+    meta = meta[~((meta["lang"] == "en") & meta["title"].fillna("").str.contains(ANIMAL, case=False, regex=True))]
+    d = sdir(cfg)
+    done = [pd.read_parquet(f) for f in d.glob("source*.parquet")] if d.exists() else []
+    if done:
+        meta = meta[~meta["id"].isin(pd.concat(done)["doc_id"])]
     pick = []
     for lg, n in want.items():
         ids = meta.loc[meta["lang"] == lg, "id"].to_numpy()
@@ -103,11 +137,12 @@ def cmd_sample(cfg, n_spec, seed=42, log=print):
     par = par.sample(frac=1.0, random_state=seed).drop_duplicates("doc_id")
     out = pd.concat([par[par["lang"] == lg].head(n) for lg, n in want.items()], ignore_index=True)
     out = out.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-    out.insert(0, "sid", np.arange(QID0, QID0 + len(out)))
-    d = sdir(cfg)
+    q0 = max([QID0 - 1] + [int(x["sid"].max()) for x in done]) + 1        # id tiếp nối các đợt trước
+    out.insert(0, "sid", np.arange(q0, q0 + len(out)))
     d.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(d / "source.parquet")
-    log(f"→ {d / 'source.parquet'}: {len(out)} đoạn nguồn {out['lang'].value_counts().to_dict()}")
+    dst = d / f"source{suffix(tag)}.parquet"
+    out.to_parquet(dst)
+    log(f"→ {dst}: {len(out)} đoạn nguồn {out['lang'].value_counts().to_dict()}, id {q0}…{q0 + len(out) - 1}")
 
 
 def load_llm(model, tp, max_len, log=print):
@@ -148,20 +183,22 @@ def parse_gen(raw):
     return {"vi": vi, "en": en, "zh": zh}, ""
 
 
-def cmd_generate(cfg, model, tp, limit=0, log=print):
+def cmd_generate(cfg, model, tp, limit=0, tag="", log=print):
     d = sdir(cfg)
-    src = pd.read_parquet(d / "source.parquet")
+    src = pd.read_parquet(d / f"source{suffix(tag)}.parquet")
     if limit:
         src = src.head(limit)
     llm, tok = load_llm(model, tp, 4096, log)
     from vllm import SamplingParams
     prompts = [chat(tok, GEN_PROMPT.format(lang=LANG_NAME.get(r.lang, r.lang), ctx=(r.ctx or "").strip(),
-                                           text=cut(r.text, r.lang)), GEN_SYSTEM) for r in src.itertuples()]
+                                           text=cut(r.text, r.lang)), GEN_SYSTEM_PM if r.lang == "en" else GEN_SYSTEM)
+               for r in src.itertuples()]
     t0 = time.time()
     outs = llm.generate(prompts, SamplingParams(temperature=0.7, top_p=0.9, max_tokens=300, seed=42))
     dt = time.time() - t0
     ok = 0
-    with (d / "gen.jsonl").open("w", encoding="utf-8") as f:
+    dst = d / f"gen{suffix(tag)}.jsonl"
+    with dst.open("w", encoding="utf-8") as f:
         for r, o in zip(src.itertuples(), outs):
             raw = o.outputs[0].text
             q, why = parse_gen(raw)
@@ -169,8 +206,8 @@ def cmd_generate(cfg, model, tp, limit=0, log=print):
             f.write(json.dumps({"sid": int(r.sid), "doc_id": int(r.doc_id), "unit_id": r.unit_id, "lang": r.lang,
                                 "q": q, "why": why, "raw": raw}, ensure_ascii=False) + "\n")
     ntok = sum(len(o.prompt_token_ids) + len(o.outputs[0].token_ids) for o in outs)
-    log(f"→ {d / 'gen.jsonl'}: {ok}/{len(src)} hợp lệ, {dt:.0f}s ({ntok / dt:.0f} token/s)")
-    rows = [json.loads(x) for x in (d / "gen.jsonl").read_text("utf-8").splitlines() if x.strip()]
+    log(f"→ {dst}: {ok}/{len(src)} hợp lệ, {dt:.0f}s ({ntok / dt:.0f} token/s)")
+    rows = [json.loads(x) for x in dst.read_text("utf-8").splitlines() if x.strip()]
     st = pd.DataFrame([(r["lang"], r["why"] or "hợp lệ") for r in rows], columns=["lang", "why"])
     log(st.groupby(["lang", "why"]).size().unstack(fill_value=0).to_string())
 
@@ -179,18 +216,20 @@ def cmd_build(cfg, log=print):
     import pyarrow as pa
     import pyarrow.parquet as pq
     d = sdir(cfg)
-    rows = [json.loads(x) for x in (d / "gen.jsonl").read_text("utf-8").splitlines() if x.strip()]
-    rows = [r for r in rows if r["q"]]
+    rows = [json.loads(x) for f in sorted(d.glob("gen*.jsonl")) for x in f.read_text("utf-8").splitlines() if x.strip()]
+    rows = [r for r in rows if r["q"]]                        # gộp mọi đợt (gen.jsonl, gen_<tag>.jsonl)
     qd = Path(cfg["work_dir"]) / cfg["expand"]["out_dir"] / "synth"
     qd.mkdir(parents=True, exist_ok=True)
     for lg in ("vi", "en", "zh"):
         pq.write_table(pa.table({"id": pa.array([r["sid"] for r in rows], pa.int64()),
                                  "query": [r["q"][lg] for r in rows], "lang": [lg] * len(rows)}),
                        qd / f"queries_{lg}.parquet")
-    with (qd / "samples.md").open("w", encoding="utf-8") as f:
-        for r in rows[:30]:
-            f.write(f"- [{r['lang']}] {r['q']['vi']}\n")
-    log(f"→ {qd}/queries_{{vi,en,zh}}.parquet: {len(rows)} câu hỏi")
+    with (qd / "samples.md").open("w", encoding="utf-8") as f:              # 10 câu mỗi ngôn ngữ đoạn nguồn
+        for lg in ("vi", "zh", "en"):
+            for r in [x for x in rows if x["lang"] == lg][-10:]:
+                f.write(f"- [{r['lang']}] {r['q']['vi']}\n")
+    log(f"→ {qd}/queries_{{vi,en,zh}}.parquet: {len(rows)} câu hỏi "
+        f"{pd.Series([r['lang'] for r in rows]).value_counts().to_dict()} (ngôn ngữ đoạn nguồn)")
 
 
 # ---------------------------------------------------------------- k8b
@@ -205,7 +244,7 @@ def cmd_candidates(cfg, run_path, top=12, far=4, far_lo=50, far_hi=200, dup=0.6,
     [far_lo, far_hi) (âm dễ, như MedCPT re-ranker); bỏ ứng viên gần trùng đoạn nguồn (Jaccard 3-gram ký tự > dup)."""
     from .rerank import unit_rows
     d = sdir(cfg)
-    src = pd.read_parquet(d / "source.parquet").set_index("sid")
+    src = pd.concat([pd.read_parquet(f) for f in sorted(d.glob("source*.parquet"))]).set_index("sid")
     r = runs.read(run_path, depth=far_hi * 3)
     r = r[r["qid"].isin(src.index)]
     dr = runs.doc_ranking(r, "max", 400).sort_values(["qid", "drank"])
@@ -294,12 +333,13 @@ def main():
     ap.add_argument("--top", type=int, default=12)
     ap.add_argument("--far", type=int, default=4)
     ap.add_argument("--shard", default="0/1")
+    ap.add_argument("--tag", default="", help="sample/generate: đợt bổ sung (vd pm) → source_<tag>, gen_<tag>")
     a = ap.parse_args()
     cfg = config.load(a.config)
     if a.cmd == "sample":
-        cmd_sample(cfg, a.n)
+        cmd_sample(cfg, a.n, a.tag)
     elif a.cmd == "generate":
-        cmd_generate(cfg, a.model, a.tp, a.limit)
+        cmd_generate(cfg, a.model, a.tp, a.limit, a.tag)
     elif a.cmd == "build":
         cmd_build(cfg)
     elif a.cmd == "candidates":
