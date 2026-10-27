@@ -255,7 +255,10 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                         "Input}, vd {'cross': ['lin07_cross', 'lin12_07_cross'], 'qwen3i': 'lin07_qwen3i_1200'} → chỉ chấm "
                         "đoạn mới\n"
                         "ENSEMBLE = False                     # True + METHODS có 'cross' và 'qwen3i' → thêm run <RUN>_ensi\n"
-                        "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)",
+                        "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)\n"
+                        "CROSS_MODEL = ''                     # model bge đã fine-tune (thư mục có finetune_meta.json trong Input, "
+                        "vd 'bge') → run <RUN>_crossft\n"
+                        "QWEN_LORA = ''                       # adapter LoRA Qwen3 đã fine-tune (vd 'qwen') → run <RUN>_qwen3ift",
                "('chunks', 'qtrans')"),
     code('''
 # (2) Xếp hạng lại trên 2 GPU (chia theo câu hỏi), ghi vào /kaggle/working/runs
@@ -291,7 +294,18 @@ def run_path(n):                                     # run trong phiên này (OU
     return str(h[0] / 'runs' / f'{n}.parquet')
 DEPTH = '' if TOP_N == 400 else str(TOP_N)           # TOP_N khác 400 → tên run riêng, vd lin07_cross800
 sfx = '_sub' if QIDS else ''
-TAG = lambda m: f'{RUN}_{m}{DEPTH}{sfx}'
+def locate_model(name):                              # thư mục output k8c trong Input (có finetune_meta.json)
+    h = sorted(glob.glob(f'{KAGGLE}/input/**/{name}/finetune_meta.json', recursive=True), key=len)
+    assert h, f'Không thấy {name}/finetune_meta.json trong /kaggle/input (Add Input output k8c)'
+    return os.path.dirname(h[0])
+FT = {'cross': bool(CROSS_MODEL), 'qwen3i': bool(QWEN_LORA), 'qwen3': bool(QWEN_LORA)}
+if CROSS_MODEL:
+    K.set({'rerank.cross_model': locate_model(CROSS_MODEL)})
+if QWEN_LORA:
+    K.set({'rerank.qwen3_lora': locate_model(QWEN_LORA)})
+    sh('python -m pip install -q peft')
+assert not any(FT.get(m) for m in REUSE), 'model đã fine-tune: không dùng lại điểm cũ của phương pháp đó (bỏ khỏi REUSE)'
+TAG = lambda m: f'{RUN}_{m}{"ft" * FT.get(m, False)}{DEPTH}{sfx}'
 for m in METHODS:
     RU = REUSE.get(m) or []
     RA = ' --reuse ' + ' '.join(run_path(x) for x in ([RU] if isinstance(RU, str) else RU)) if RU else ''
@@ -304,10 +318,10 @@ ENS = []
 if ENSEMBLE:
     assert 'cross' in METHODS and 'qwen3i' in METHODS, 'ENSEMBLE cần METHODS có cả cross và qwen3i'
     sh(f'python -m mirret.ensemble --base {RUNS_IN}/{RUN}.parquet --bge {OUT}/{TAG("cross")}.parquet '
-       f'--qwen {OUT}/{TAG("qwen3i")}.parquet --top-n {TOP_N} --out {OUT} --suffix i{DEPTH}{sfx}', 'ensemble')
+       f'--qwen {OUT}/{TAG("qwen3i")}.parquet --top-n {TOP_N} --out {OUT} --suffix i{"ft" * any(FT.values())}{DEPTH}{sfx}', 'ensemble')
     for f in glob.glob(f'{OUT}/{RUN}_ip0[68]i*'):                # ensemble.py ghi thêm hai run nội suy — không dùng
         os.remove(f)
-    ENS = [f'{RUN}_ensi{DEPTH}']
+    ENS = [f'{RUN}_ensi{"ft" * any(FT.values())}{DEPTH}']
 '''),
     code('''
 # (3) Bài nộp: run gộp (không rerank) + từng run đã rerank. Run thử trên bộ nhãn (QIDS) thì không nộp.
@@ -462,15 +476,21 @@ in ở ô (6).
 vd `lin07_cross` — thêm dataset có `runs/lin07_cross.parquet`), `FUSED = ['lin07prf']`; `MODES = ['rw']` (câu viết lại
 của nhóm, thêm dataset có `qexp/rw/queries_*.parquet`), `FUSED = ['lin07rw']`. Thêm output k7 cũ có `index/dense_*` để
 khỏi dựng lại chỉ mục dense. Nhánh baseline chép cả mức `@parents/@children` (lin07 gộp theo mức như bản đã nộp).
+
+**Fine-tune (27/10):** câu hỏi tổng hợp của k8a → `MODES = ['synth']`, `FUSED = ['synth_lin07']`, `QIDS = ''`,
+`RERANK = False`; thêm Input `mir2-synth` (output k8a, có `qexp/synth/queries_*.parquet`) → `runs/synth_lin07.parquet`
+cho k8b.
 """),
-    setup_cell("k7-v2", "MODES = ['q2d', 'hyde']             # 'q2d' | 'hyde' (sinh bằng LLM) | 'prf' | 'rw' (không sinh)\n"
+    setup_cell("k7-v3", "MODES = ['q2d', 'hyde']             # 'q2d' | 'hyde' (sinh bằng LLM) | 'prf' | 'rw' | 'synth' (không sinh)\n"
                         "MODEL = 'qwen25_14b'\n"
                         "QIDS = 'queries.csv'                 # '' = cả 1.200 câu\n"
                         "LIMIT = 0                            # >0: chỉ N câu đầu (đọc thử đoạn giả)\n"
                         "BATCH, QUANT = 8, '4bit'\n"
                         "FUSED = ['q2d9', 'hyde9', 'q2dlex', 'bm25c9']   # fuse.configs trong retrieval.yaml\n"
                         "FEEDBACK = 'lin07_cross'             # 'prf': run đã rerank làm phản hồi (runs/<tên>.parquet trong Input)\n"
-                        "TOP_N = 400\nSAVE_INDEX = False", "('chunks',)"),
+                        "TOP_N = 400\nSAVE_INDEX = False\n"
+                        "RERANK = True                        # False: chỉ truy hồi + gộp (MODES=['synth'] cho fine-tune)",
+               "('chunks',)"),
     code('''
 # (2) Đầu vào: danh sách câu; câu hỏi 3 ngôn ngữ GIỐNG baseline; bản ghi dịch (concepts); đoạn giả phiên trước; 9 nhánh
 if QIDS and not os.path.exists(QIDS) and not QIDS.replace(',', '').isdigit():
@@ -576,14 +596,14 @@ print(pd.DataFrame(rows).pivot(index='nhánh', columns='biến thể', values='t
 '''),
     code('''
 # (7) Rerank bge-reranker-v2-m3 top-400 (câu hỏi gốc) → run gửi chấm; bỏ bản sao 9 nhánh baseline khỏi output
-for f in FUSED:
+for f in (FUSED if RERANK else []):                   # câu tổng hợp (synth) không có trong qtrans → không rerank
     if not os.path.exists(f'{RUNS}/{f}.parquet'):
         print('bỏ qua', f, '(chưa gộp được)'); continue
     par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.rerank --config {K.cfg} --run {RUNS}/{f}.parquet --method cross '
          f'--top-n {TOP_N} --shard {g}/2 --device cuda:0{QARG}' for g in range(2)], f'rerank_{f}')
     sh(f'python -m mirret.rerank --config {K.cfg} --run {RUNS}/{f}.parquet --method cross --top-n {TOP_N} '
        f'--shard 0/2{QARG}')
-if not QIDS:                                          # chạy đủ 1.200 câu → bài nộp cho từng run đã rerank
+if not QIDS and RERANK:                               # chạy đủ 1.200 câu → bài nộp cho từng run đã rerank
     K.set({'retrieve.out_dir': RUNS})
     for f in FUSED:
         if os.path.exists(f'{RUNS}/{f}_cross.parquet'):
@@ -642,5 +662,117 @@ for n in ['medcpt_en_dense', 'en_dense'] + FUSE:
     r = R.read(f'{OUT}/{n}.parquet', depth=400)
     print(f'{n:18s} top-400: PubMed {r["doc_id"].isin(pm).mean():.1%}')
 report('k9')
+'''),
+])
+
+# ---------------------------------------------------------------- k8: dữ liệu fine-tune reranker (GPU, vLLM)
+VLLM_NOTE = """**vLLM trên T4:** cài ở ô (2) (`VLLM_SPEC`, mặc định bản mới nhất). Lỗi khi nạp model → thử `VLLM_SPEC =
+'vllm==0.9.2'` (hoặc bản cũ hơn có Qwen3), hoặc `MODEL = 'Qwen/Qwen3-14B-AWQ'` (nhanh ~2 lần, chất lượng thấp hơn)."""
+save("k8a_synth.ipynb", [
+    md(f"""
+# k8a — Câu hỏi tổng hợp cho fine-tune reranker (GPU T4 ×2, vLLM)
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On. **Add Input:** `mir2-code`, `mir2-data`, `mir2-chunks`.
+Lấy ngẫu nhiên đoạn nguồn trong kho (`N`: vi/zh/en — có PubMed vì đáp án private có), teacher `MODEL` (Qwen3-32B-AWQ,
+chỉ dùng lúc huấn luyện) viết mỗi đoạn một câu hỏi tiếng Việt kiểu người dùng + bản dịch en/zh. KHÔNG dùng câu thi.
+**Chạy thử trước:** `LIMIT = 100` → đọc `samples.md` + tốc độ (token/s) ở log, rồi `LIMIT = 0`.
+**Đầu ra:** `synth/source.parquet`, `synth/gen.jsonl`, `qexp/synth/queries_{{vi,en,zh}}.parquet` → *New Dataset*
+**`mir2-synth`** → k7 (`MODES = ['synth']`, `FUSED = ['synth_lin07']`, `RERANK = False`) → k8b.
+{VLLM_NOTE}
+"""),
+    setup_cell("k8a-v1", "N = 'vi:1400,zh:900,en:700'           # số đoạn nguồn mỗi ngôn ngữ\n"
+                         "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
+                         "LIMIT = 100                          # >0: chỉ N đoạn đầu (chạy thử); 0 = tất cả\n"
+                         "VLLM_SPEC = 'vllm'", "('chunks',)"),
+    code('''
+# (2) vLLM + đoạn nguồn (CPU)
+sh(f'python -m pip install -q "{VLLM_SPEC}"', 'pip_vllm')
+sh('python -c "import vllm, torch; print(vllm.__version__, torch.__version__)"')
+sh(f'python -m mirret.synth sample --config {K.cfg} --n {N}', 'sample')
+'''),
+    code('''
+# (3) Sinh câu hỏi (2 GPU, tensor parallel) → câu hỏi cho k7
+lim = f' --limit {LIMIT}' if LIMIT else ''
+sh(f'python -m mirret.synth generate --config {K.cfg} --model {MODEL} --tp 2{lim}', 'generate')
+sh(f'python -m mirret.synth build --config {K.cfg}', 'build')
+print(open(f'{K.work}/qexp/synth/samples.md', encoding='utf-8').read())
+report('k8a')
+'''),
+])
+
+save("k8b_label.ipynb", [
+    md(f"""
+# k8b — Ứng viên khó + nhãn teacher cho câu hỏi tổng hợp (GPU T4 ×2, vLLM)
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
+**Add Input:** `mir2-code`, `mir2-data`, `mir2-chunks`, `mir2-synth` (output k8a), output k7 có `runs/synth_lin07.parquet`.
+Mỗi câu tổng hợp: đoạn nguồn + đoạn tốt nhất của top-`TOP` tài liệu (âm khó) + `FAR` tài liệu ngẫu nhiên hạng 50–200
+(âm dễ); bỏ bản gần trùng đoạn nguồn. Teacher chấm 0/1/2 theo thang `docs/EVAL_PLAN.md` §2.3 (tắt chế độ suy nghĩ), lấy
+xác suất từng mức từ logprob → nhãn mềm.
+**Nhiều tài khoản:** cùng Input, `SHARD = '0/3'`, `'1/3'`, `'2/3'` (ứng viên tính lại giống hệt ở mọi phiên).
+**Chạy thử:** `LIMIT = 30` (30 câu) → xem cặp/s ở log để chia phần.
+**Đầu ra:** `synth/pairs.parquet`, `synth/labels-<phần>.parquet` → *New Dataset* **`mir2-labels-<phần>`** → k8c.
+{VLLM_NOTE}
+"""),
+    setup_cell("k8b-v1", "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
+                         "TOP, FAR = 12, 4\n"
+                         "SHARD = '0/1'\n"
+                         "LIMIT = 30                           # >0: chỉ N câu đầu của phần (đo tốc độ); 0 = cả phần\n"
+                         "VLLM_SPEC = 'vllm'", "('chunks',)"),
+    code('''
+# (2) Dữ liệu k8a + run gộp của k7 → ứng viên (CPU)
+for d in locate_all('synth/source.parquet'):
+    shutil.copytree(f'{d}/synth', f'{K.work}/synth', dirs_exist_ok=True)
+for d in locate_all('qexp/synth/queries_vi.parquet'):
+    shutil.copytree(f'{d}/qexp/synth', f'{K.work}/qexp/synth', dirs_exist_ok=True)
+RUN = locate('runs/synth_lin07.parquet') / 'runs' / 'synth_lin07.parquet'
+print('run:', RUN)
+sh(f'python -m mirret.synth candidates --config {K.cfg} --run {RUN} --top {TOP} --far {FAR}', 'candidates')
+'''),
+    code('''
+# (3) Teacher chấm (2 GPU, tensor parallel)
+sh(f'python -m pip install -q "{VLLM_SPEC}"', 'pip_vllm')
+lim = f' --limit {LIMIT}' if LIMIT else ''
+sh(f'python -m mirret.synth label --config {K.cfg} --model {MODEL} --tp 2 --shard {SHARD}{lim}', 'label')
+report('k8b')
+'''),
+])
+
+save("k8c_train.ipynb", [
+    md("""
+# k8c — Fine-tune reranker (GPU T4 ×2): bge (GPU 0) và Qwen3-Reranker-4B + LoRA (GPU 1) song song
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
+**Add Input:** `mir2-code`, `mir2-data`, mọi output k8b (`synth/labels-*.parquet`, `synth/pairs.parquet`, `qexp/synth`).
+Loss: cross-entropy trên nhóm (1 dương P(2) ≥ 0,6 + âm khó P(0) ≥ 0,7) + BCE kéo điểm về nhãn mềm của teacher.
+5% câu tổng hợp để kiểm tra: in AUC / độ chính xác cặp TRƯỚC và SAU khi train (sau phải cao hơn).
+**Đầu ra:** `ft/bge/` (model đầy đủ), `ft/qwen/` (adapter LoRA) → *New Dataset* **`mir2-ft`** → k5 với
+`CROSS_MODEL = 'bge'` / `QWEN_LORA = 'qwen'` (không dùng REUSE cho phương pháp đã fine-tune).
+"""),
+    setup_cell("k8c-v1", "TRAIN = ['bge', 'qwen']              # bỏ bớt nếu chỉ train một model\n"
+                         "MAX_GROUPS = {'bge': 0, 'qwen': 3000}   # 0 = mọi nhóm; qwen ~3 s/nhóm 8 đoạn trên T4\n"
+                         "EPOCHS = 1", "()"),
+    code('''
+# (2) Gom nhãn của mọi phần k8b
+os.makedirs(f'{K.work}/synth', exist_ok=True)
+for d in locate_all('synth/pairs.parquet'):
+    for f in glob.glob(f'{d}/synth/labels*.parquet') + [f'{d}/synth/pairs.parquet']:
+        shutil.copy(f, f'{K.work}/synth/')
+for d in locate_all('qexp/synth/queries_vi.parquet'):
+    shutil.copytree(f'{d}/qexp/synth', f'{K.work}/qexp/synth', dirs_exist_ok=True)
+print(sorted(os.listdir(f'{K.work}/synth')))
+sh('python -m pip install -q peft')
+'''),
+    code('''
+# (3) Train song song: mỗi model một GPU
+cmds = []
+for g, kind in enumerate(TRAIN):
+    mg = f' --max-groups {MAX_GROUPS[kind]}' if MAX_GROUPS.get(kind) else ''
+    cmds.append(f'CUDA_VISIBLE_DEVICES={g} python -m mirret.finetune {kind} --config {K.cfg} --out {K.work}/ft/{kind} '
+                f'--device cuda:0 --epochs {EPOCHS}{mg}')
+par(cmds, 'finetune')
+for kind in TRAIN:
+    print(kind, open(f'{K.work}/ft/{kind}/finetune_meta.json', encoding='utf-8').read())
+report('k8c')
 '''),
 ])

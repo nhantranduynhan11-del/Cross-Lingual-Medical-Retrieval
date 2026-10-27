@@ -121,6 +121,8 @@ fuse:
     # public không có PubMed → chỉ kiểm được ở vòng private (1–4/11, đáp án làm lại có PubMed).
     lin07m: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, "en_lsr*0.5", "en_bm25*0.5", zh_dense, zh_lsr, zh_bm25, medcpt_en_dense]}
     lin07um: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, en_lsr, en_bm25, zh_dense, zh_lsr, zh_bm25, medcpt_en_dense]}
+    # câu hỏi tổng hợp cho fine-tune (mirret/synth.py, k7 MODES=['synth']): cùng công thức lin07 → ứng viên khó như lúc thi
+    synth_lin07: {linear: 0.7, runs: [synth_vi_dense, synth_vi_lsr, synth_vi_bm25, synth_en_dense, "synth_en_lsr*0.5", "synth_en_bm25*0.5", synth_zh_dense, synth_zh_lsr, synth_zh_bm25]}
 
 medcpt:                                  # nhánh PubMed bằng MedCPT (mirret/medcpt.py), câu hỏi = bản dịch tiếng Anh
   article_model: "ncbi/MedCPT-Article-Encoder"
@@ -136,6 +138,7 @@ rerank:
                                          # (multi-vector BGE-M3; không hơn rrf9 trên tập có nhãn)
   cross_model: "BAAI/bge-reranker-v2-m3"
   qwen3_model: "Qwen/Qwen3-Reranker-4B"  # method qwen3 (instruction mặc định của model) | qwen3i (instruction y khoa)
+  qwen3_lora: null                       # adapter LoRA của mirret.finetune qwen (k5: QWEN_LORA); null = model gốc
   qwen3_batch_tokens: 8192               # 4B trên T4 fp16: nhỏ hơn bge để vừa bộ nhớ
   top_n: 400                             # F2 tính theo TẬP → xếp hạng lại chỉ có ích khi top_n > k_chunk
   match_lang: true                       # đoạn zh chấm bằng câu hỏi zh, đoạn en bằng câu en (thiếu bản dịch → câu vi)

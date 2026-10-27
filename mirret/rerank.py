@@ -104,7 +104,7 @@ class Qwen3Scorer:
     DEFAULT_INSTRUCT = "Given a web search query, retrieve relevant passages that answer the query"
     MED_INSTRUCT = "Given a Vietnamese medical question, retrieve passages that answer the question"
 
-    def __init__(self, name, device="cuda:0", fp16=True, max_length=768, instruct=None):
+    def __init__(self, name, device="cuda:0", fp16=True, max_length=768, instruct=None, lora=None):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch = torch
@@ -112,6 +112,9 @@ class Qwen3Scorer:
         self.device = torch.device(device)
         dtype = torch.float16 if fp16 and self.device.type == "cuda" else torch.float32
         self.model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype).to(self.device).eval()
+        if lora:                                    # adapter của mirret.finetune qwen → gộp vào trọng số (không chậm hơn)
+            from peft import PeftModel
+            self.model = PeftModel.from_pretrained(self.model, lora).merge_and_unload().eval()
         self.yes = self.tok.convert_tokens_to_ids("yes")
         self.no = self.tok.convert_tokens_to_ids("no")
         self.pre = self.tok.encode(self.PREFIX, add_special_tokens=False)
@@ -177,7 +180,7 @@ def rerank(cfg, df, method, device, log=print):
                 log(f"  {n + 1} câu hỏi, {(time.time() - t0) / (n + 1):.2f}s/câu")
     elif method in ("qwen3", "qwen3i"):
         sc = Qwen3Scorer(rc["qwen3_model"], device, True, rc["query_max_length"] + rc["doc_max_length"],
-                         Qwen3Scorer.MED_INSTRUCT if method == "qwen3i" else None)
+                         Qwen3Scorer.MED_INSTRUCT if method == "qwen3i" else None, rc.get("qwen3_lora"))
         npairs, t0 = 0, time.time()                         # không tính thời gian tải / nạp model
         for n, (q, g) in enumerate(df.groupby("qid", sort=True)):
             ids = g["unit_id"].tolist()
