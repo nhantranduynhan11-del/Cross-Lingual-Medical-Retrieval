@@ -303,7 +303,7 @@ if CROSS_MODEL:
     K.set({'rerank.cross_model': locate_model(CROSS_MODEL)})
 if QWEN_LORA:
     K.set({'rerank.qwen3_lora': locate_model(QWEN_LORA)})
-    sh('python -m pip install -q peft')
+    sh('python -m pip install -q peft'); sh('python -m pip uninstall -y -q torchao')   # peft mới đòi torchao > 0.16, Kaggle có 0.10, không dùng tới
 assert not any(FT.get(m) for m in REUSE), 'model đã fine-tune: không dùng lại điểm cũ của phương pháp đó (bỏ khỏi REUSE)'
 TAG = lambda m: f'{RUN}_{m}{"ft" * FT.get(m, False)}{DEPTH}{sfx}'
 for m in METHODS:
@@ -766,7 +766,7 @@ BCE kéo điểm về nhãn mềm của teacher. Mỗi câu tổng hợp một n
 **Đầu ra:** `ft/bge/` (model đầy đủ), `ft/qwen/` (adapter LoRA) → *New Dataset* **`mir2-ft`** → k5 với
 `CROSS_MODEL = 'bge'` / `QWEN_LORA = 'qwen'` (không dùng REUSE cho phương pháp đã fine-tune).
 """),
-    setup_cell("k8c-v2", "TRAIN = ['bge', 'qwen']              # bỏ bớt nếu chỉ train một model\n"
+    setup_cell("k8c-v3", "TRAIN = ['bge', 'qwen']              # bỏ bớt nếu chỉ train một model\n"
                          "MAX_GROUPS = {'bge': 0, 'qwen': 3000}   # 0 = mọi nhóm; qwen ~3 s/nhóm 8 đoạn trên T4\n"
                          "EPOCHS = 1", "()"),
     code('''
@@ -779,6 +779,7 @@ for d in locate_all('qexp/synth/queries_vi.parquet'):
     shutil.copytree(f'{d}/qexp/synth', f'{K.work}/qexp/synth', dirs_exist_ok=True)
 print(sorted(os.listdir(f'{K.work}/synth')))
 sh('python -m pip install -q peft')
+sh('python -m pip uninstall -y -q torchao')           # peft mới đòi torchao > 0.16 (Kaggle có 0.10) — không dùng tới
 '''),
     code('''
 # (3) Train song song: mỗi model một GPU
