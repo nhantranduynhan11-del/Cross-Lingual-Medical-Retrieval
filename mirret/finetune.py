@@ -2,10 +2,10 @@
 
 Dữ liệu: <work>/synth/labels-*.parquet (P(0), P(1), P(2) của teacher) + pairs.parquet (chữ) + qexp/synth (câu hỏi 3 ngôn
 ngữ). Câu hỏi theo ngôn ngữ đoạn như lúc chấm thật (rerank.match_lang): đoạn zh dùng bản zh, đoạn en dùng bản en.
-Nhóm: mỗi đoạn dương (P(2) ≥ --pos) + (G−1) đoạn âm (P(0) ≥ --neg; ưu tiên âm khó "top", thiếu thì lấy "far"); tối đa
---groups-per-q nhóm mỗi câu. Loss = cross-entropy trên nhóm (localized contrastive như FlagEmbedding reranker / MedCPT
-re-ranker) + --bce × BCE(sigmoid(điểm), P(2) + ½P(1)) trên mọi cặp đã chấm — phần BCE kéo P(yes) về mức teacher (chỗ nghẽn
-hiện tại: Qwen cho P(yes) cao cho quá nhiều đoạn → precision thấp).
+Nhóm: mỗi câu một nhóm = đoạn nguồn + ứng viên của chính câu (đã chấm 0/1/2) + 2 đoạn của câu khác (điểm 0).
+Loss = chưng cất theo danh sách KL(softmax(--beta × điểm teacher) ‖ softmax(điểm model)) (k8b 28/10: teacher chấm ~2/3
+ứng viên top-12 là 2 → nhóm "1 dương + âm" sẽ gần như toàn âm dễ) + --bce × BCE(sigmoid(điểm), P(2) + ½P(1)) — phần BCE
+kéo P(yes) về mức teacher (chỗ nghẽn hiện tại: Qwen cho P(yes) cao cho quá nhiều đoạn → precision thấp).
 5% câu để kiểm tra: độ chính xác cặp (dương > âm) và AUC (P(2) ≥ 0,5) trước và sau khi train.
 
   python -m mirret.finetune bge  --out <work>/ft/bge   --device cuda:0   # BAAI/bge-reranker-v2-m3, cập nhật toàn bộ
@@ -41,26 +41,35 @@ def load_data(cfg, seed=42):
     qids = sorted(lab["qid"].unique())
     random.Random(seed).shuffle(qids)
     dev = set(qids[:max(20, len(qids) // 20)])
-    return lab[~lab["qid"].isin(dev)].reset_index(drop=True), lab[lab["qid"].isin(dev)].reset_index(drop=True)
+    qtext = {q: {lg: qs[lg][q] for lg in qs if q in qs[lg]} for q in qids}
+    return (lab[~lab["qid"].isin(dev)].reset_index(drop=True), lab[lab["qid"].isin(dev)].reset_index(drop=True),
+            qtext)
 
 
-def make_groups(lab, size, pos, neg, per_q, seed=42):
+def make_groups(lab, qtext, size, n_rand=2, seed=42):
+    """Mỗi câu một nhóm `size` mục (câu hỏi, đoạn, nhãn mềm P(2) + ½P(1), điểm teacher P(1) + 2P(2)): đoạn nguồn + ứng
+    viên của chính câu (ngẫu nhiên, đã được teacher chấm 0/1/2) + `n_rand` đoạn của câu tổng hợp KHÁC (ghép câu hỏi này
+    bằng ngôn ngữ của đoạn, điểm 0). Học theo danh sách (KL tới phân phối điểm teacher) thay vì "1 dương + âm": teacher
+    chấm ~2/3 ứng viên top-12 là trả lời được (k8b 28/10) → âm thật chỉ ~2/câu, nhóm "1 dương" sẽ toàn âm dễ."""
     rng = random.Random(seed)
+    qid, lang, doc = lab["qid"].to_numpy(), lab["lang"].to_numpy(), lab["doc"].to_numpy()
+    item = lambda i: (lab.at[i, "query"], lab.at[i, "doc"], float(lab.at[i, "target"]), float(lab.at[i, "grade"]))
     groups = []
-    for _, g in lab.groupby("qid"):
-        P = g[g["p2"] >= pos]
-        N = g[g["p0"] >= neg]
-        hard = N[N["kind"] == "top"].index.tolist()
-        easy = N[N["kind"] != "top"].index.tolist()
-        if P.empty or not (hard or easy):
+    for q, g in lab.groupby("qid"):
+        src = g.index[g["kind"] == "source"].tolist()
+        rest = g.index[g["kind"] != "source"].tolist()
+        rng.shuffle(rest)
+        own = (src + rest)[:size - n_rand]
+        if len(own) < 2:
             continue
-        for i in P.sort_values("p2", ascending=False).index[:per_q]:
-            rng.shuffle(hard)
-            rng.shuffle(easy)
-            negs = (hard + easy)[:size - 1]
-            if len(negs) < size - 1:                          # thiếu âm → lặp lại (giữ kích thước nhóm cố định)
-                negs = (negs * (size - 1))[:size - 1]
-            groups.append([i] + negs)
+        items, used = [item(i) for i in own], set(own)
+        while len(items) < size:
+            j = rng.randrange(len(lab))
+            if qid[j] != q and j not in used:
+                used.add(j)
+                lg = lang[j] if lang[j] in qtext[q] else "vi"
+                items.append((qtext[q][lg], doc[j], 0.0, 0.0))
+        groups.append(items)
     rng.shuffle(groups)
     return groups
 
@@ -162,11 +171,11 @@ def evaluate(m, dev, batch, log):
     return res
 
 
-def train(kind, cfg, out, device, size, lr, epochs, max_groups, pos, neg, per_q, bce, log=print):
+def train(kind, cfg, out, device, size, lr, epochs, max_groups, beta, bce, log=print):
     torch = __import__("torch")
     rc = cfg["rerank"]
-    tr, dev = load_data(cfg)
-    groups = make_groups(tr, size, pos, neg, per_q)
+    tr, dev, qtext = load_data(cfg)
+    groups = make_groups(tr, qtext, size)
     if max_groups:
         groups = groups[:max_groups]
     log(f"{kind}: train {tr['qid'].nunique()} câu / {len(tr)} cặp → {len(groups)} nhóm × {size}; "
@@ -184,13 +193,14 @@ def train(kind, cfg, out, device, size, lr, epochs, max_groups, pos, neg, per_q,
     t0, k, run_loss = time.time(), 0, []
     for ep in range(epochs):
         for grp in groups:
-            b = tr.loc[grp]
+            qs, ds, ts, gs = zip(*grp)
             with torch.autocast("cuda", dtype=torch.float16, enabled=m.device.type == "cuda"):
-                s = m.forward(b["query"].tolist(), b["doc"].tolist())
+                s = m.forward(list(qs), list(ds))
             s = s.float()
-            ce = torch.nn.functional.cross_entropy(s[None, :], torch.zeros(1, dtype=torch.long, device=s.device))
-            tgt = torch.tensor(b["target"].to_numpy(), dtype=torch.float32, device=s.device)
-            loss = ce + bce * torch.nn.functional.binary_cross_entropy_with_logits(s, tgt)
+            teach = torch.softmax(beta * torch.tensor(gs, dtype=torch.float32, device=s.device), dim=0)
+            kl = -(teach * torch.log_softmax(s, dim=0)).sum()        # KL(teacher ‖ model) bỏ hằng số entropy
+            tgt = torch.tensor(ts, dtype=torch.float32, device=s.device)
+            loss = kl + bce * torch.nn.functional.binary_cross_entropy_with_logits(s, tgt)
             if not torch.isfinite(loss):
                 log(f"  bước {k}: loss không hữu hạn → bỏ nhóm")
                 opt.zero_grad(set_to_none=True)
@@ -210,7 +220,7 @@ def train(kind, cfg, out, device, size, lr, epochs, max_groups, pos, neg, per_q,
     Path(out).mkdir(parents=True, exist_ok=True)
     m.save(out)
     meta = {"kind": kind, "base": rc["cross_model"] if kind == "bge" else rc["qwen3_model"], "groups": len(groups),
-            "group_size": size, "lr": lr, "epochs": epochs, "pos": pos, "neg": neg, "bce": bce,
+            "group_size": size, "lr": lr, "epochs": epochs, "beta": beta, "bce": bce,
             "train_queries": int(tr["qid"].nunique()), "dev_before": before, "dev_after": after,
             "minutes": round((time.time() - t0) / 60, 1)}
     (Path(out) / "finetune_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -228,15 +238,13 @@ def main():
     ap.add_argument("--lr", type=float, default=None, help="mặc định bge 2e-5, qwen 1e-4")
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--max-groups", type=int, default=0)
-    ap.add_argument("--pos", type=float, default=0.6, help="dương: P(2) ≥ pos")
-    ap.add_argument("--neg", type=float, default=0.7, help="âm: P(0) ≥ neg")
-    ap.add_argument("--groups-per-q", type=int, default=2)
+    ap.add_argument("--beta", type=float, default=3.0, help="phân phối teacher = softmax(beta × điểm 0–2)")
     ap.add_argument("--bce", type=float, default=1.0)
     a = ap.parse_args()
     cfg = config.load(a.config)
     size = a.group or (16 if a.kind == "bge" else 8)
     lr = a.lr or (2e-5 if a.kind == "bge" else 1e-4)
-    train(a.kind, cfg, a.out, a.device, size, lr, a.epochs, a.max_groups, a.pos, a.neg, a.groups_per_q, a.bce)
+    train(a.kind, cfg, a.out, a.device, size, lr, a.epochs, a.max_groups, a.beta, a.bce)
 
 
 if __name__ == "__main__":

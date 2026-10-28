@@ -760,12 +760,13 @@ save("k8c_train.ipynb", [
 
 **Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
 **Add Input:** `mir2-code`, `mir2-data`, mọi output k8b (`synth/labels-*.parquet`, `synth/pairs.parquet`, `qexp/synth`).
-Loss: cross-entropy trên nhóm (1 dương P(2) ≥ 0,6 + âm khó P(0) ≥ 0,7) + BCE kéo điểm về nhãn mềm của teacher.
+Loss: chưng cất theo danh sách (KL tới softmax(3 × điểm teacher 0–2) trên ứng viên của chính câu + 2 đoạn câu khác) +
+BCE kéo điểm về nhãn mềm của teacher. Mỗi câu tổng hợp một nhóm (bge 16 đoạn, qwen 8 đoạn).
 5% câu tổng hợp để kiểm tra: in AUC / độ chính xác cặp TRƯỚC và SAU khi train (sau phải cao hơn).
 **Đầu ra:** `ft/bge/` (model đầy đủ), `ft/qwen/` (adapter LoRA) → *New Dataset* **`mir2-ft`** → k5 với
 `CROSS_MODEL = 'bge'` / `QWEN_LORA = 'qwen'` (không dùng REUSE cho phương pháp đã fine-tune).
 """),
-    setup_cell("k8c-v1", "TRAIN = ['bge', 'qwen']              # bỏ bớt nếu chỉ train một model\n"
+    setup_cell("k8c-v2", "TRAIN = ['bge', 'qwen']              # bỏ bớt nếu chỉ train một model\n"
                          "MAX_GROUPS = {'bge': 0, 'qwen': 3000}   # 0 = mọi nhóm; qwen ~3 s/nhóm 8 đoạn trên T4\n"
                          "EPOCHS = 1", "()"),
     code('''
