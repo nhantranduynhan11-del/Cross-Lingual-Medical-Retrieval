@@ -816,3 +816,60 @@ for kind in TRAIN:
 report('k8c')
 '''),
 ])
+
+# ---------------------------------------------------------------- k10: giám khảo LLM lúc suy luận (GPU, vLLM)
+save("k10_judge.ipynb", [
+    md(f"""
+# k10 — Giám khảo LLM chấm tài liệu của câu thi (GPU T4 ×2, vLLM, Qwen3-14B-AWQ)
+
+**Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
+**Add Input:** `mir2-code`, `mir2-data`, `mir2-chunks` (đoạn cha), `mir2-runs` (`qtrans/queries_*.parquet`),
+`mir2-private-prep` (bản mới có `runs/lin07_ensi_1200.parquet`).
+Mỗi câu thi: top-`HI` tài liệu của lin07_ensi (đoạn tốt nhất + tiêu đề + phần đầu bài) → Qwen3-14B (mở, ≤ 14B, 04/2025:
+hợp luật suy luận) chấm 0/1/2 cả tài liệu (prompt như teacher v2, tắt suy nghĩ), xác suất từng mức từ logprob. Không
+huấn luyện gì; model > 14B không dùng ở đây. Ghép trên máy: `tools/merge_judge.py` → `span_chunks.py`.
+**Chia việc:** tài khoản i (0…n−1) đặt `SHARD = 'i/n'` — mọi tài khoản cùng `HI`, `QIDS`. Trong tài khoản: 2 tiến trình,
+mỗi GPU một bản model (`TP = 1`). Hết RAM GPU khi nạp → `TP = 2` (một tiến trình, chậm hơn ~30%).
+**Bước 1 — đo tốc độ (~15 phút):** `LIMIT = 4` → log in `cặp/s` của mỗi GPU. Thời gian cả phần ≈
+1200 × HI / (2 × n × cặp/s) giây (vd 1,1 cặp/s, HI 250, n 6 → 6,3 giờ). Quá 10 giờ → giảm `HI` (200) hoặc tăng n.
+**Bước 2:** `LIMIT = 0`, *Save Version → Save & Run All*. Mỗi lô 20 câu ghi một file ngay → phiên bị dừng vẫn giữ phần đã
+chấm: chạy lại với output cũ làm Input, các lô đã có được bỏ qua.
+**Đầu ra:** `judge/labels-<phần>-<GPU>-b<lô>.parquet` (vài MB) → tải về `results/judge_<i>/`.
+{VLLM_NOTE}
+"""),
+    setup_cell("k10-v1", "SHARD = '0/6'                        # tài khoản i trong n: '0/6' … '5/6'\n"
+                         "HI = 250                             # số tài liệu đầu mỗi câu được chấm\n"
+                         "QIDS = ''                            # '' = cả 1.200 câu; 'public600_a.txt' = chỉ các câu đó\n"
+                         "MODEL = 'Qwen/Qwen3-14B-AWQ'\n"
+                         "TP = 1                               # 1 = mỗi GPU một bản model; 2 = một bản trên 2 GPU\n"
+                         "LIMIT = 4                            # >0: N câu đầu mỗi GPU (đo tốc độ); 0 = cả phần\n"
+                         "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks', 'qtrans')"),
+    code('''
+# (2) Cặp (câu, tài liệu) của phần này (CPU: đọc đoạn cha + phần đầu bài trong kho); nhãn cũ trong Input → bỏ qua lô đã có
+RUN = locate('runs/lin07_ensi_1200.parquet') / 'runs' / 'lin07_ensi_1200.parquet'
+print('run:', RUN)
+if QIDS and not os.path.exists(QIDS) and not QIDS.replace(',', '').isdigit():
+    hits = sorted(glob.glob(f'{KAGGLE}/input/**/{QIDS}', recursive=True), key=len)
+    assert hits, f'Không thấy {QIDS} trong /kaggle/input'
+    QIDS = hits[0]
+QARG = f' --qids "{QIDS}"' if QIDS else ''
+TAG = SHARD.replace('/', 'of')
+os.makedirs(f'{K.work}/judge', exist_ok=True)
+for f in glob.glob(f'{KAGGLE}/input/**/judge/labels-{TAG}-*.parquet', recursive=True):
+    shutil.copy(f, f'{K.work}/judge/')
+print('nhãn cũ:', len(glob.glob(f'{K.work}/judge/labels-*.parquet')))
+sh(f'python -m mirret.llmjudge pairs --config {K.cfg} --run {RUN} --hi {HI} --shard {SHARD}{QARG}', 'pairs')
+'''),
+    code('''
+# (3) Chấm: mỗi GPU một tiến trình (TP = 1) hoặc một tiến trình trên 2 GPU (TP = 2)''' + VLLM_INSTALL + '''lim = f' --limit {LIMIT}' if LIMIT else ''
+base = f'python -m mirret.llmjudge label --config {K.cfg} --model {MODEL} --shard {SHARD} --tp {TP}{lim}'
+if TP == 1:
+    par([f'CUDA_VISIBLE_DEVICES={g} {base} --part {g}/2' for g in range(2)], 'label')
+else:
+    sh(f'{base} --part 0/1', 'label')
+for f in glob.glob(f'{K.work}/judge/pairs-*.parquet'):
+    os.remove(f)                                      # chỉ giữ nhãn (nhỏ) trong output
+print(sorted(os.listdir(f'{K.work}/judge')))
+report('k10')
+'''),
+])
