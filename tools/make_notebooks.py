@@ -310,7 +310,8 @@ if QWEN_LORA:
     sh('python -m pip install -q peft'); sh('python -m pip uninstall -y -q torchao')   # peft mới đòi torchao > 0.16, Kaggle có 0.10, không dùng tới
 assert not any(FT.get(m) for m in REUSE), 'model đã fine-tune: không dùng lại điểm cũ của phương pháp đó (bỏ khỏi REUSE)'
 K.set({'rerank.ft_alpha': FT_ALPHA})
-FTN = 'ft' + (str(round(FT_ALPHA * 100)) if FT_ALPHA < 1 else '')   # vd ft50 với FT_ALPHA = 0,5
+FTN = ('ft2' if any(x.endswith('synth2') for x in (CROSS_MODEL, QWEN_LORA)) else 'ft') + \
+      (str(round(FT_ALPHA * 100)) if FT_ALPHA < 1 else '')    # vd ft50 (v1, FT_ALPHA 0,5), ft2 (model v2)
 TAG = lambda m: f'{RUN}_{m}{FTN * FT.get(m, False)}{"pm" * PUBMED_ONLY}{DEPTH}{sfx}'
 PM = ' --pubmed-only' if PUBMED_ONLY else ''
 assert not (PUBMED_ONLY and ENSEMBLE), 'PUBMED_ONLY: tắt ENSEMBLE (ghép trên máy bằng tools/en_reorder.py)'
@@ -486,7 +487,7 @@ của nhóm, thêm dataset có `qexp/rw/queries_*.parquet`), `FUSED = ['lin07rw'
 khỏi dựng lại chỉ mục dense. Nhánh baseline chép cả mức `@parents/@children` (lin07 gộp theo mức như bản đã nộp).
 
 **Fine-tune (27/10):** câu hỏi tổng hợp của k8a → `MODES = ['synth']`, `FUSED = ['synth_lin07']`, `QIDS = ''`,
-`RERANK = False`; thêm Input `mir2-synth` (output k8a, có `qexp/synth/queries_*.parquet`) → `runs/synth_lin07.parquet`
+`RERANK = False`; thêm Input `mir2-synth` (output k8a, có `qexp/synth/queries_*.parquet`) → `runs/synth_lin07.parquet`; v2 (30/10): `MODES = ['synth2']`, `FUSED = ['synth2_lin07']`, Input `mir2-synth2`
 cho k8b.
 """),
     setup_cell("k7-v3", "MODES = ['q2d', 'hyde']             # 'q2d' | 'hyde' (sinh bằng LLM) | 'prf' | 'rw' | 'synth' (không sinh)\n"
@@ -696,32 +697,38 @@ save("k8a_synth.ipynb", [
 Lấy ngẫu nhiên đoạn nguồn trong kho (`N`: vi/zh/en — có PubMed vì đáp án private có), teacher `MODEL` (Qwen3-32B-AWQ,
 chỉ dùng lúc huấn luyện) viết mỗi đoạn một câu hỏi tiếng Việt kiểu người dùng + bản dịch en/zh. KHÔNG dùng câu thi.
 **Chạy thử trước:** `LIMIT = 100` → đọc `samples.md` + tốc độ (token/s) ở log, rồi `LIMIT = 0`.
-**Đầu ra:** `synth/source.parquet`, `synth/gen.jsonl`, `qexp/synth/queries_{{vi,en,zh}}.parquet` → *New Dataset*
-**`mir2-synth`** → k7 (`MODES = ['synth']`, `FUSED = ['synth_lin07']`, `RERANK = False`) → k8b.
-**Đợt bổ sung (vd PubMed, 27/10):** Add Input thêm `mir2-synth` cũ, `TAG = 'pm'`, `N = 'en:2000'` → chỉ sinh phần mới
-(`source_pm.parquet`, `gen_pm.jsonl`, không trùng tài liệu / id đợt trước), `qexp/synth` dựng lại từ MỌI đợt → output này
-thay `mir2-synth` cũ.
+**v2 (30/10, mặc định):** `VARIANT = 'synth2'`, `STYLE = 'mix'` (câu ngắn / vừa / dài theo phân bố độ dài câu thi),
+`QA_CAP = 0.3` (trang hỏi-đáp tối đa 30% mỗi ngôn ngữ). Lý do: Qwen-ft v1 lệch nhiều nhất ở câu dài và đẩy trang
+hỏi-đáp tiếng Trung lên. v1: `VARIANT = 'synth'`, `STYLE = 'none'`, `QA_CAP = 1.0`.
+**Đầu ra:** `<VARIANT>/source.parquet`, `<VARIANT>/gen.jsonl`, `qexp/<VARIANT>/queries_{{vi,en,zh}}.parquet` → *New
+Dataset* **`mir2-synth2`** → k7 (`MODES = ['synth2']`, `FUSED = ['synth2_lin07']`, `RERANK = False`) → k8b.
+**Đợt bổ sung:** Add Input output k8a cũ cùng VARIANT, `TAG = 'pm'`, `N = 'en:2000'` → chỉ sinh phần mới, `qexp/<VARIANT>`
+dựng lại từ MỌI đợt.
 {VLLM_NOTE}
 """),
-    setup_cell("k8a-v4", "N = 'vi:3000,zh:1300,en:1600'        # dư vì bị bỏ qua: hợp lệ ~vi 51%, zh 74%, en 20% (prompt cũ)\n"
-                         "TAG = ''                             # '' = đợt đầu; 'pm' = đợt bổ sung (Add Input mir2-synth cũ)\n"
+    setup_cell("k8a-v5", "VARIANT = 'synth2'                   # 'synth' = v1 (27/10); 'synth2' = v2\n"
+                         "N = 'vi:2400,zh:1400,en:2200'        # dư vì bị bỏ qua (v1 hợp lệ: vi ~51%, zh ~74%; en xem log)\n"
+                         "STYLE = 'mix'                        # 'mix' = ngắn 25% / vừa 50% / dài 25%; 'none' = như v1\n"
+                         "QA_CAP = 0.3                         # tỉ lệ tối đa trang hỏi-đáp mỗi ngôn ngữ; 1.0 = như v1\n"
+                         "TAG = ''                             # '' = đợt đầu; 'pm' = đợt bổ sung (Add Input output k8a cũ)\n"
                          "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
                          "LIMIT = 100                          # >0: chỉ N đoạn đầu (chạy thử); 0 = tất cả\n"
                          "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks',)"),
     code('''
-# (2) vLLM + đoạn nguồn (CPU); đợt bổ sung: chép các đợt trước từ Input''' + VLLM_INSTALL + '''for d in (locate_all('synth/gen.jsonl') if TAG else []):
-    shutil.copytree(f'{d}/synth', f'{K.work}/synth', dirs_exist_ok=True)
-    print('đợt trước:', d, sorted(os.listdir(f'{d}/synth')))
-assert not TAG or os.path.exists(f'{K.work}/synth/gen.jsonl'), 'TAG đợt bổ sung: Add Input mir2-synth (đợt đầu)'
+# (2) vLLM + đoạn nguồn (CPU); đợt bổ sung: chép các đợt trước từ Input''' + VLLM_INSTALL + '''for d in (locate_all(f'{VARIANT}/gen.jsonl') if TAG else []):
+    shutil.copytree(f'{d}/{VARIANT}', f'{K.work}/{VARIANT}', dirs_exist_ok=True)
+    print('đợt trước:', d, sorted(os.listdir(f'{d}/{VARIANT}')))
+assert not TAG or os.path.exists(f'{K.work}/{VARIANT}/gen.jsonl'), 'TAG đợt bổ sung: Add Input output k8a đợt đầu'
+VA = f' --variant {VARIANT}'
 TG = f' --tag {TAG}' if TAG else ''
-sh(f'python -m mirret.synth sample --config {K.cfg} --n {N}{TG}', 'sample')
+sh(f'python -m mirret.synth sample --config {K.cfg} --n {N} --qa-cap {QA_CAP}{TG}{VA}', 'sample')
 '''),
     code('''
 # (3) Sinh câu hỏi (2 GPU, tensor parallel) → câu hỏi cho k7 (gộp mọi đợt)
 lim = f' --limit {LIMIT}' if LIMIT else ''
-sh(f'python -m mirret.synth generate --config {K.cfg} --model {MODEL} --tp 2{lim}{TG}', 'generate')
-sh(f'python -m mirret.synth build --config {K.cfg}', 'build')
-print(open(f'{K.work}/qexp/synth/samples.md', encoding='utf-8').read())
+sh(f'python -m mirret.synth generate --config {K.cfg} --model {MODEL} --tp 2 --style {STYLE}{lim}{TG}{VA}', 'generate')
+sh(f'python -m mirret.synth build --config {K.cfg}{VA}', 'build')
+print(open(f'{K.work}/qexp/{VARIANT}/samples.md', encoding='utf-8').read())
 report('k8a')
 '''),
 ])
@@ -731,33 +738,37 @@ save("k8b_label.ipynb", [
 # k8b — Ứng viên khó + nhãn teacher cho câu hỏi tổng hợp (GPU T4 ×2, vLLM)
 
 **Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
-**Add Input:** `mir2-code`, `mir2-data`, `mir2-chunks`, `mir2-synth` (output k8a), output k7 có `runs/synth_lin07.parquet`.
+**Add Input:** `mir2-code`, `mir2-data`, `mir2-chunks`, output k8a (`mir2-synth2`), output k7 có `runs/<VARIANT>_lin07.parquet`.
 Mỗi câu tổng hợp: đoạn nguồn + đoạn tốt nhất của top-`TOP` tài liệu (âm khó) + `FAR` tài liệu ngẫu nhiên hạng 50–200
-(âm dễ); bỏ bản gần trùng đoạn nguồn. Teacher chấm 0/1/2 theo thang `docs/EVAL_PLAN.md` §2.3 (tắt chế độ suy nghĩ), lấy
-xác suất từng mức từ logprob → nhãn mềm.
-**Nhiều tài khoản:** cùng Input, `SHARD = '0/3'`, `'1/3'`, `'2/3'` (ứng viên tính lại giống hệt ở mọi phiên).
+(âm dễ); bỏ bản gần trùng đoạn nguồn. Teacher chấm 0/1/2 (tắt chế độ suy nghĩ), lấy xác suất từng mức từ logprob → nhãn mềm.
+**v2 (mặc định `LEVEL = 'doc'`):** teacher xem tiêu đề + phần đầu bài + đoạn liên quan nhất và chấm CẢ TÀI LIỆU, tiêu chí
+chặt hơn (trang hỏi-đáp về ca của người khác tối đa 1). v1: `LEVEL = 'unit'` (chấm từng đoạn).
+**Nhiều tài khoản:** cùng Input, `SHARD = '0/4'` … `'3/4'` (ứng viên tính lại giống hệt ở mọi phiên).
 **Chạy thử:** `LIMIT = 30` (30 câu) → xem cặp/s ở log để chia phần.
-**Đầu ra:** `synth/pairs.parquet`, `synth/labels-<phần>.parquet` → *New Dataset* **`mir2-labels-<phần>`** → k8c.
+**Đầu ra:** `<VARIANT>/pairs.parquet`, `<VARIANT>/labels-<phần>.parquet` → *New Dataset* → k8c.
 {VLLM_NOTE}
 """),
-    setup_cell("k8b-v2", "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
+    setup_cell("k8b-v3", "VARIANT = 'synth2'                   # 'synth' = v1; 'synth2' = v2\n"
+                         "LEVEL = 'doc'                        # 'doc' = chấm cả tài liệu (v2); 'unit' = chấm từng đoạn (v1)\n"
+                         "MODEL = 'Qwen/Qwen3-32B-AWQ'\n"
                          "TOP, FAR = 12, 4\n"
                          "SHARD = '0/1'\n"
                          "LIMIT = 30                           # >0: chỉ N câu đầu của phần (đo tốc độ); 0 = cả phần\n"
                          "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks',)"),
     code('''
-# (2) Dữ liệu k8a + run gộp của k7 → ứng viên (CPU)
-for d in locate_all('synth/source.parquet'):
-    shutil.copytree(f'{d}/synth', f'{K.work}/synth', dirs_exist_ok=True)
-for d in locate_all('qexp/synth/queries_vi.parquet'):
-    shutil.copytree(f'{d}/qexp/synth', f'{K.work}/qexp/synth', dirs_exist_ok=True)
-RUN = locate('runs/synth_lin07.parquet') / 'runs' / 'synth_lin07.parquet'
+# (2) Dữ liệu k8a + run gộp của k7 → ứng viên (CPU; v2 đọc thêm phần đầu bài trong kho)
+for d in locate_all(f'{VARIANT}/source.parquet'):
+    shutil.copytree(f'{d}/{VARIANT}', f'{K.work}/{VARIANT}', dirs_exist_ok=True)
+for d in locate_all(f'qexp/{VARIANT}/queries_vi.parquet'):
+    shutil.copytree(f'{d}/qexp/{VARIANT}', f'{K.work}/qexp/{VARIANT}', dirs_exist_ok=True)
+RUN = locate(f'runs/{VARIANT}_lin07.parquet') / 'runs' / f'{VARIANT}_lin07.parquet'
 print('run:', RUN)
-sh(f'python -m mirret.synth candidates --config {K.cfg} --run {RUN} --top {TOP} --far {FAR}', 'candidates')
+VA = f' --variant {VARIANT}'
+sh(f'python -m mirret.synth candidates --config {K.cfg} --run {RUN} --top {TOP} --far {FAR}{VA}', 'candidates')
 '''),
     code('''
 # (3) Teacher chấm (2 GPU, tensor parallel)''' + VLLM_INSTALL + '''lim = f' --limit {LIMIT}' if LIMIT else ''
-sh(f'python -m mirret.synth label --config {K.cfg} --model {MODEL} --tp 2 --shard {SHARD}{lim}', 'label')
+sh(f'python -m mirret.synth label --config {K.cfg} --model {MODEL} --tp 2 --shard {SHARD} --level {LEVEL}{lim}{VA}', 'label')
 report('k8b')
 '''),
 ])
@@ -767,25 +778,28 @@ save("k8c_train.ipynb", [
 # k8c — Fine-tune reranker (GPU T4 ×2): bge (GPU 0) và Qwen3-Reranker-4B + LoRA (GPU 1) song song
 
 **Cài đặt:** Accelerator = **GPU T4 ×2**, Internet = On.
-**Add Input:** `mir2-code`, `mir2-data`, mọi output k8b (`synth/labels-*.parquet`, `synth/pairs.parquet`, `qexp/synth`).
+**Add Input:** `mir2-code`, `mir2-data`, mọi output k8b cùng `VARIANT` (`<VARIANT>/labels-*.parquet`, `pairs.parquet`,
+`qexp/<VARIANT>`).
 Loss: chưng cất theo danh sách (KL tới softmax(3 × điểm teacher 0–2) trên ứng viên của chính câu + 2 đoạn câu khác) +
 BCE kéo điểm về nhãn mềm của teacher. Mỗi câu tổng hợp một nhóm (bge 16 đoạn, qwen 8 đoạn).
 5% câu tổng hợp để kiểm tra: in AUC / độ chính xác cặp TRƯỚC và SAU khi train (sau phải cao hơn).
-**Đầu ra:** `ft/bge/` (model đầy đủ), `ft/qwen/` (adapter LoRA) → *New Dataset* **`mir2-ft`** → k5 với
-`CROSS_MODEL = 'bge'` / `QWEN_LORA = 'qwen'` (không dùng REUSE cho phương pháp đã fine-tune).
+**Đầu ra:** `ft/bge_<VARIANT>/` (model đầy đủ), `ft/qwen_<VARIANT>/` (adapter LoRA) → *New Dataset* → k5 với
+`CROSS_MODEL = 'bge_synth2'` / `QWEN_LORA = 'qwen_synth2'` (+ `FT_ALPHA` để nội suy về model gốc; không dùng REUSE cho
+phương pháp đã fine-tune).
 """),
-    setup_cell("k8c-v3", "TRAIN = ['bge', 'qwen']              # bỏ bớt nếu chỉ train một model\n"
-                         "MAX_GROUPS = {'bge': 0, 'qwen': 3000}   # 0 = mọi nhóm; qwen ~3 s/nhóm 8 đoạn trên T4\n"
+    setup_cell("k8c-v4", "VARIANT = 'synth2'                   # 'synth' = v1; 'synth2' = v2\n"
+                         "TRAIN = ['bge', 'qwen']              # bỏ bớt nếu chỉ train một model\n"
+                         "MAX_GROUPS = {'bge': 0, 'qwen': 3000}   # 0 = mọi nhóm; qwen ~8 s/nhóm 8 đoạn trên T4\n"
                          "EPOCHS = 1", "()"),
     code('''
 # (2) Gom nhãn của mọi phần k8b
-os.makedirs(f'{K.work}/synth', exist_ok=True)
-for d in locate_all('synth/pairs.parquet'):
-    for f in glob.glob(f'{d}/synth/labels*.parquet') + [f'{d}/synth/pairs.parquet']:
-        shutil.copy(f, f'{K.work}/synth/')
-for d in locate_all('qexp/synth/queries_vi.parquet'):
-    shutil.copytree(f'{d}/qexp/synth', f'{K.work}/qexp/synth', dirs_exist_ok=True)
-print(sorted(os.listdir(f'{K.work}/synth')))
+os.makedirs(f'{K.work}/{VARIANT}', exist_ok=True)
+for d in locate_all(f'{VARIANT}/pairs.parquet'):
+    for f in glob.glob(f'{d}/{VARIANT}/labels*.parquet') + [f'{d}/{VARIANT}/pairs.parquet']:
+        shutil.copy(f, f'{K.work}/{VARIANT}/')
+for d in locate_all(f'qexp/{VARIANT}/queries_vi.parquet'):
+    shutil.copytree(f'{d}/qexp/{VARIANT}', f'{K.work}/qexp/{VARIANT}', dirs_exist_ok=True)
+print(sorted(os.listdir(f'{K.work}/{VARIANT}')))
 sh('python -m pip install -q peft')
 sh('python -m pip uninstall -y -q torchao')           # peft mới đòi torchao > 0.16 (Kaggle có 0.10) — không dùng tới
 '''),
@@ -794,11 +808,11 @@ sh('python -m pip uninstall -y -q torchao')           # peft mới đòi torchao
 cmds = []
 for g, kind in enumerate(TRAIN):
     mg = f' --max-groups {MAX_GROUPS[kind]}' if MAX_GROUPS.get(kind) else ''
-    cmds.append(f'CUDA_VISIBLE_DEVICES={g} python -m mirret.finetune {kind} --config {K.cfg} --out {K.work}/ft/{kind} '
-                f'--device cuda:0 --epochs {EPOCHS}{mg}')
+    cmds.append(f'CUDA_VISIBLE_DEVICES={g} python -m mirret.finetune {kind} --config {K.cfg} '
+                f'--out {K.work}/ft/{kind}_{VARIANT} --device cuda:0 --epochs {EPOCHS} --variant {VARIANT}{mg}')
 par(cmds, 'finetune')
 for kind in TRAIN:
-    print(kind, open(f'{K.work}/ft/{kind}/finetune_meta.json', encoding='utf-8').read())
+    print(kind, open(f'{K.work}/ft/{kind}_{VARIANT}/finetune_meta.json', encoding='utf-8').read())
 report('k8c')
 '''),
 ])

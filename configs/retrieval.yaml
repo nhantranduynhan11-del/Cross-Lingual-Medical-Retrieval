@@ -123,6 +123,8 @@ fuse:
     lin07um: {linear: 0.7, runs: [vi_dense, vi_lsr, vi_bm25, en_dense, en_lsr, en_bm25, zh_dense, zh_lsr, zh_bm25, medcpt_en_dense]}
     # câu hỏi tổng hợp cho fine-tune (mirret/synth.py, k7 MODES=['synth']): cùng công thức lin07 → ứng viên khó như lúc thi
     synth_lin07: {linear: 0.7, runs: [synth_vi_dense, synth_vi_lsr, synth_vi_bm25, synth_en_dense, "synth_en_lsr*0.5", "synth_en_bm25*0.5", synth_zh_dense, synth_zh_lsr, synth_zh_bm25]}
+    # fine-tune v2 (30/10): câu hỏi nhiều kiểu độ dài, giới hạn trang hỏi-đáp (k8a VARIANT='synth2')
+    synth2_lin07: {linear: 0.7, runs: [synth2_vi_dense, synth2_vi_lsr, synth2_vi_bm25, synth2_en_dense, "synth2_en_lsr*0.5", "synth2_en_bm25*0.5", synth2_zh_dense, synth2_zh_lsr, synth2_zh_bm25]}
 
 medcpt:                                  # nhánh PubMed bằng MedCPT (mirret/medcpt.py), câu hỏi = bản dịch tiếng Anh
   article_model: "ncbi/MedCPT-Article-Encoder"

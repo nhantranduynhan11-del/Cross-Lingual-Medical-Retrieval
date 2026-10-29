@@ -17,6 +17,11 @@ Luồng (Kaggle):
   k7   MODES=['synth'], FUSED=['synth_lin07'], RERANK=False → runs/synth_lin07.parquet
   k8b  python -m mirret.synth candidates → <work>/synth/pairs.parquet
        python -m mirret.synth label      → <work>/synth/labels-<phần>.parquet (P(0), P(1), P(2) từ logprob của teacher)
+
+v2 (30/10, --variant synth2, sau khi v1 thua trên LB public: Qwen-ft lệch ở câu dài, đẩy trang hỏi-đáp tiếng Trung lên,
+đẩy bài y khoa tiếng Việt đầy đủ xuống): sample --qa-cap 0.3 (trang hỏi-đáp ≤ 30% mỗi ngôn ngữ); generate --style mix
+(câu ngắn / vừa / dài theo phân bố độ dài câu thi); candidates thêm phần đầu bài; label --level doc (chấm cả tài liệu,
+tiêu chí chặt hơn). Dùng ở suy luận kèm WiSE-FT (rerank.ft_alpha) để giữ gần model gốc.
 """
 import argparse
 import json
@@ -31,7 +36,16 @@ import pyarrow.dataset as ds
 
 from . import config, runs
 
-QID0 = 100001                                                 # câu hỏi tổng hợp không trùng id câu thi (1..1200)
+VARIANT = "synth"                                             # synth = v1 (27/10), synth2 = v2 (30/10) — main() đặt
+QID0S = {"synth": 100001, "synth2": 300001}                   # câu hỏi tổng hợp không trùng id câu thi (1..1200)
+
+
+def qid0():
+    return QID0S.get(VARIANT, 500001)
+
+
+def qdir(cfg):
+    return Path(cfg["work_dir"]) / cfg["expand"]["out_dir"] / VARIANT
 LANG_NAME = {"vi": "tiếng Việt", "en": "tiếng Anh", "zh": "tiếng Trung"}
 
 # phần cố định đặt TRƯỚC (system) để vLLM dùng lại bộ đệm tiền tố cho mọi lượt; phần thay đổi (đoạn, câu hỏi) đặt sau
@@ -39,7 +53,7 @@ GEN_SYSTEM = """Bạn tạo dữ liệu huấn luyện cho công cụ tìm kiế
 viết MỘT câu hỏi mà người dùng Việt Nam (bệnh nhân, người nhà) có thể gõ vào công cụ tìm kiếm sức khoẻ, sao cho đoạn đó \
 trả lời được câu hỏi.
 Yêu cầu:
-- Tự nhiên như người thật hỏi: có thể kể ngắn hoàn cảnh (tuổi, triệu chứng, thuốc đang dùng) rồi hỏi; 10–60 từ.
+- Tự nhiên như người thật hỏi; độ dài và số ý theo KIỂU CÂU HỎI ghi ở cuối mỗi lượt (không có thì 10–60 từ).
 - Hỏi về nội dung chính của đoạn, không hỏi chi tiết vụn vặt; không chép nguyên tiêu đề; không nhắc "đoạn văn", "bài viết".
 - Câu tiếng Việt chỉ dùng tiếng Việt (tên thuốc, thuật ngữ quốc tế viết bằng chữ Latinh), không chèn chữ Hán.
 BỎ QUA đoạn (trả về {"skip": true}) nếu người bệnh / người nhà sẽ không tìm đọc nó để giải đáp thắc mắc sức khoẻ: tin thời \
@@ -61,7 +75,7 @@ quan tâm sức khoẻ) có thể hỏi về bệnh, triệu chứng, thuốc, p
 tới, sao cho bài giúp trả lời câu hỏi đó.
 Yêu cầu:
 - Nghiên cứu lâm sàng, so sánh điều trị, ca bệnh, tổng quan đều dùng được: hỏi về kết luận thực tế (có hiệu quả không, \
-có an toàn không, nguy cơ gì, điều trị thế nào, ai nên làm); 10–60 từ; không dùng thuật ngữ thống kê.
+có an toàn không, nguy cơ gì, điều trị thế nào, ai nên làm); độ dài theo KIỂU CÂU HỎI ghi ở cuối mỗi lượt (không có thì 10–60 từ); không dùng thuật ngữ thống kê.
 - Tên bệnh, thuốc, kỹ thuật giữ thuật ngữ quốc tế viết bằng chữ Latinh nếu cần; câu tiếng Việt không chèn chữ Hán.
 CHỈ BỎ QUA (trả về {"skip": true}) nếu bài nghiên cứu trên động vật, tế bào, vi khuẩn hay thực vật; thuần kỹ thuật phòng \
 thí nghiệm hoặc phương pháp thống kê; hoặc không liên quan sức khoẻ con người.
@@ -78,6 +92,15 @@ ANIMAL = (r"\b(?:rats?|mice|mouse|murine|rabbits?|pigs?|piglets?|porcine|bovine|
 GEN_PROMPT = """Đoạn tài liệu ({lang}):
 Tiêu đề: {ctx}
 Nội dung: {text}"""
+# v2 (30/10): Qwen-ft lệch nhiều nhất ở câu thi dài (Spearman với model gốc 0,69 ở câu > 39 từ, 0,75 ở câu ≤ 13 từ) vì
+# câu tổng hợp v1 ngắn, một ý → mỗi đoạn nguồn một kiểu, theo phân bố độ dài câu thi (p25 / p50 / p75 = 13 / 18 / 39 từ)
+STYLES = {
+    "short": "KIỂU CÂU HỎI: ngắn, 6–13 từ, gọn như gõ vào ô tìm kiếm (vd: Viêm da tiết bã có lây không?).",
+    "medium": "KIỂU CÂU HỎI: vừa, 14–39 từ, có thể nêu ngắn hoàn cảnh rồi hỏi một ý chính.",
+    "long": "KIỂU CÂU HỎI: dài, 40–120 từ, kể hoàn cảnh cụ thể (tuổi, giới, bệnh sử, triệu chứng, thuốc đã dùng, kết quả "
+            "xét nghiệm) rồi hỏi 2–3 ý liên quan, như người bệnh viết lên diễn đàn hỏi bác sĩ.",
+}
+STYLE_P = {"short": 0.25, "medium": 0.50, "long": 0.25}
 
 LABEL_SYSTEM = """Bạn là chuyên gia y khoa đánh giá mức liên quan giữa câu hỏi và đoạn tài liệu cho hệ thống tìm kiếm.
 Thang chấm:
@@ -95,10 +118,31 @@ LABEL_PROMPT = """Câu hỏi: {q}{qx}
 Đoạn tài liệu ({lang}):
 {ctx}
 {text}"""
+# v2 (30/10): chấm cả TÀI LIỆU (tiêu đề + phần đầu bài + đoạn liên quan nhất), tiêu chí chặt hơn. Lý do: Qwen-ft v1 đẩy
+# trang hỏi-đáp tiếng Trung lên (120ask +38 hạng, ask.39.net +34) và đẩy bài y khoa tiếng Việt viết đầy đủ xuống (youmed −37,
+# medlatec −31, suckhoedoisong −26) — chấm từng đoạn ưu ái bài một đoạn; trang hỏi-đáp về ca của người khác được 2.
+LABEL_SYSTEM_DOC = """Bạn là chuyên gia y khoa đánh giá mức liên quan giữa câu hỏi và TÀI LIỆU cho hệ thống tìm kiếm. Bạn \
+được xem tiêu đề, phần đầu bài và đoạn liên quan nhất của tài liệu; hãy chấm cả tài liệu, không chỉ đoạn.
+Thang chấm:
+2 — tài liệu nói đúng vấn đề được hỏi và cung cấp thông tin chính xác, đủ để trả lời ý chính của câu hỏi (đúng đối tượng, \
+hoàn cảnh nếu câu hỏi nêu); bài viết chuyên về đúng vấn đề đó.
+1 — tài liệu cùng vấn đề và có thông tin hữu ích nhưng chỉ trả lời một phần; hoặc là trang hỏi-đáp về trường hợp của người \
+khác chỉ áp dụng được một phần cho người hỏi; hoặc vấn đề chỉ được nhắc qua trong bài về chủ đề khác.
+0 — khác vấn đề; cùng chủ đề rộng nhưng không trả lời câu hỏi; quảng cáo, trang thông báo; trang chỉ có câu hỏi chưa có trả \
+lời; danh sách tiêu đề bài khác.
+Quy tắc: không chấm theo việc trùng từ khoá; ngôn ngữ của tài liệu không ảnh hưởng; không chấm độ đúng y khoa; không chắc \
+→ chọn mức thấp hơn.
+Chỉ trả lời một chữ số: 0, 1 hoặc 2."""
+LABEL_PROMPT_DOC = """Câu hỏi: {q}{qx}
+
+Tài liệu ({lang}):
+Tiêu đề: {ctx}
+Phần đầu bài: {lead}
+Đoạn liên quan nhất: {text}"""
 
 
 def sdir(cfg):
-    return Path(cfg["work_dir"]) / "synth"
+    return Path(cfg["work_dir"]) / VARIANT
 
 
 def cut(text, lang, n_vi=1800, n_zh=900):
@@ -112,7 +156,7 @@ def suffix(tag):
     return f"_{tag}" if tag else ""
 
 
-def cmd_sample(cfg, n_spec, tag="", seed=42, log=print):
+def cmd_sample(cfg, n_spec, tag="", qa_cap=1.0, seed=42, log=print):
     """Đoạn nguồn: mỗi ngôn ngữ n tài liệu ngẫu nhiên (bỏ bản trùng, bài rỗng / quá ngắn; PubMed bỏ tiêu đề nghiên cứu
     động vật / tế bào), mỗi tài liệu 1 đoạn cha ≥ 100 token chọn ngẫu nhiên. --tag: đợt bổ sung (source_<tag>.parquet,
     id riêng, không trùng tài liệu các đợt trước)."""
@@ -127,22 +171,32 @@ def cmd_sample(cfg, n_spec, tag="", seed=42, log=print):
     done = [pd.read_parquet(f) for f in d.glob("source*.parquet")] if d.exists() else []
     if done:
         meta = meta[~meta["id"].isin(pd.concat(done)["doc_id"])]
-    pick = []
+    # v2: trang hỏi-đáp tối đa qa_cap mỗi ngôn ngữ (v1: zh hợp lệ 74% nhiều phần là trang hỏi-đáp → model học "trang
+    # hỏi-đáp = liên quan"); tập ứng viên thật có ~27% trang hỏi-đáp
+    quota, pick = {}, []
     for lg, n in want.items():
-        ids = meta.loc[meta["lang"] == lg, "id"].to_numpy()
-        pick += rng.choice(ids, size=min(len(ids), int(n * 1.3)), replace=False).tolist()   # dư 30%: bài không có đoạn hợp lệ
+        is_qa = meta["doc_type"] == "qa"
+        n_qa = min(int(round(n * qa_cap)), int(((meta["lang"] == lg) & is_qa).sum()))   # en (PubMed) không có hỏi-đáp
+        for qa, m in ((True, n_qa), (False, n - n_qa)) if qa_cap < 1 else ((None, n),):
+            sel = (meta["lang"] == lg) & (is_qa == qa if qa is not None else True)
+            ids = meta.loc[sel, "id"].to_numpy()
+            pick += rng.choice(ids, size=min(len(ids), int(m * 1.3)), replace=False).tolist()  # dư 30%: thiếu đoạn hợp lệ
+            quota[(lg, qa)] = m
     par = ds.dataset(str(cfg.path("chunks") / "parents")).to_table(
-        columns=["unit_id", "doc_id", "lang", "ctx", "text", "n_tokens"], filter=ds.field("doc_id").isin(pick)).to_pandas()
+        columns=["unit_id", "doc_id", "lang", "doc_type", "ctx", "text", "n_tokens"],
+        filter=ds.field("doc_id").isin(pick)).to_pandas()
     par = par[par["n_tokens"] >= 100]
     par = par.sample(frac=1.0, random_state=seed).drop_duplicates("doc_id")
-    out = pd.concat([par[par["lang"] == lg].head(n) for lg, n in want.items()], ignore_index=True)
+    out = pd.concat([par[(par["lang"] == lg) & ((par["doc_type"] == "qa") == qa if qa is not None else True)].head(m)
+                     for (lg, qa), m in quota.items()], ignore_index=True)
     out = out.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-    q0 = max([QID0 - 1] + [int(x["sid"].max()) for x in done]) + 1        # id tiếp nối các đợt trước
+    q0 = max([qid0() - 1] + [int(x["sid"].max()) for x in done]) + 1      # id tiếp nối các đợt trước
     out.insert(0, "sid", np.arange(q0, q0 + len(out)))
     d.mkdir(parents=True, exist_ok=True)
     dst = d / f"source{suffix(tag)}.parquet"
     out.to_parquet(dst)
-    log(f"→ {dst}: {len(out)} đoạn nguồn {out['lang'].value_counts().to_dict()}, id {q0}…{q0 + len(out) - 1}")
+    log(f"→ {dst}: {len(out)} đoạn nguồn {out['lang'].value_counts().to_dict()}, id {q0}…{q0 + len(out) - 1}; "
+        f"trang hỏi-đáp {(out['doc_type'] == 'qa').mean():.0%}")
 
 
 def load_llm(model, tp, max_len, log=print):
@@ -178,33 +232,37 @@ def parse_gen(raw):
         return None, "vi có chữ Hán"
     if not re.search(r"[一-鿿]", zh):
         return None, "zh không có chữ Hán"
-    if not 6 <= len(vi.split()) <= 90:
+    if not 4 <= len(vi.split()) <= 160:
         return None, "độ dài vi"
     return {"vi": vi, "en": en, "zh": zh}, ""
 
 
-def cmd_generate(cfg, model, tp, limit=0, tag="", log=print):
+def cmd_generate(cfg, model, tp, limit=0, tag="", style="none", log=print):
     d = sdir(cfg)
     src = pd.read_parquet(d / f"source{suffix(tag)}.parquet")
     if limit:
         src = src.head(limit)
+    rng = np.random.default_rng(7)
+    styles = (rng.choice(list(STYLE_P), size=len(src), p=list(STYLE_P.values())) if style == "mix"
+              else np.array([""] * len(src)))
     llm, tok = load_llm(model, tp, 4096, log)
     from vllm import SamplingParams
     prompts = [chat(tok, GEN_PROMPT.format(lang=LANG_NAME.get(r.lang, r.lang), ctx=(r.ctx or "").strip(),
-                                           text=cut(r.text, r.lang)), GEN_SYSTEM_PM if r.lang == "en" else GEN_SYSTEM)
-               for r in src.itertuples()]
+                                           text=cut(r.text, r.lang)) + ("\n\n" + STYLES[st] if st else ""),
+                    GEN_SYSTEM_PM if r.lang == "en" else GEN_SYSTEM)
+               for r, st in zip(src.itertuples(), styles)]
     t0 = time.time()
     outs = llm.generate(prompts, SamplingParams(temperature=0.7, top_p=0.9, max_tokens=300, seed=42))
     dt = time.time() - t0
     ok = 0
     dst = d / f"gen{suffix(tag)}.jsonl"
     with dst.open("w", encoding="utf-8") as f:
-        for r, o in zip(src.itertuples(), outs):
+        for r, o, st in zip(src.itertuples(), outs, styles):
             raw = o.outputs[0].text
             q, why = parse_gen(raw)
             ok += q is not None
             f.write(json.dumps({"sid": int(r.sid), "doc_id": int(r.doc_id), "unit_id": r.unit_id, "lang": r.lang,
-                                "q": q, "why": why, "raw": raw}, ensure_ascii=False) + "\n")
+                                "style": str(st), "q": q, "why": why, "raw": raw}, ensure_ascii=False) + "\n")
     ntok = sum(len(o.prompt_token_ids) + len(o.outputs[0].token_ids) for o in outs)
     log(f"→ {dst}: {ok}/{len(src)} hợp lệ, {dt:.0f}s ({ntok / dt:.0f} token/s)")
     rows = [json.loads(x) for x in dst.read_text("utf-8").splitlines() if x.strip()]
@@ -218,7 +276,7 @@ def cmd_build(cfg, log=print):
     d = sdir(cfg)
     rows = [json.loads(x) for f in sorted(d.glob("gen*.jsonl")) for x in f.read_text("utf-8").splitlines() if x.strip()]
     rows = [r for r in rows if r["q"]]                        # gộp mọi đợt (gen.jsonl, gen_<tag>.jsonl)
-    qd = Path(cfg["work_dir"]) / cfg["expand"]["out_dir"] / "synth"
+    qd = qdir(cfg)
     qd.mkdir(parents=True, exist_ok=True)
     for lg in ("vi", "en", "zh"):
         pq.write_table(pa.table({"id": pa.array([r["sid"] for r in rows], pa.int64()),
@@ -227,9 +285,11 @@ def cmd_build(cfg, log=print):
     with (qd / "samples.md").open("w", encoding="utf-8") as f:              # 10 câu mỗi ngôn ngữ đoạn nguồn
         for lg in ("vi", "zh", "en"):
             for r in [x for x in rows if x["lang"] == lg][-10:]:
-                f.write(f"- [{r['lang']}] {r['q']['vi']}\n")
+                f.write(f"- [{r['lang']}{'/' + r['style'] if r.get('style') else ''}] {r['q']['vi']}\n")
+    nw = np.array([len(r["q"]["vi"].split()) for r in rows])
     log(f"→ {qd}/queries_{{vi,en,zh}}.parquet: {len(rows)} câu hỏi "
-        f"{pd.Series([r['lang'] for r in rows]).value_counts().to_dict()} (ngôn ngữ đoạn nguồn)")
+        f"{pd.Series([r['lang'] for r in rows]).value_counts().to_dict()} (ngôn ngữ đoạn nguồn); số từ p25/p50/p75 "
+        f"{np.percentile(nw, [25, 50, 75]).round().tolist()} (câu thi: 13 / 18 / 39)")
 
 
 # ---------------------------------------------------------------- k8b
@@ -237,6 +297,21 @@ def jaccard(a, b, n=3):
     sa = {a[i:i + n] for i in range(max(1, len(a) - n + 1))}
     sb = {b[i:i + n] for i in range(max(1, len(b) - n + 1))}
     return len(sa & sb) / max(1, len(sa | sb))
+
+
+def leads(cfg, p, log=print, n_vi=700, n_zh=350, batch=5000):
+    """Phần đầu bài (chữ thuần) cho từng cặp; rỗng khi đoạn ứng viên là đoạn đầu bài (_p0) hoặc bài ngắn hơn đoạn."""
+    from .chunk import parse
+    need = sorted({int(x) for x, u in zip(p["doc_id"], p["unit_id"]) if not str(u).endswith("_p0")})
+    corpus, head = ds.dataset(str(cfg.path("corpus"))), {}
+    for b in range(0, len(need), batch):
+        t = corpus.to_table(columns=["id", "lang", "text"], filter=ds.field("id").isin(need[b:b + batch])).to_pydict()
+        for i, lg, x in zip(t["id"], t["lang"], t["text"]):
+            plain = parse(x or "")[0].strip()
+            n = n_zh if lg == "zh" else n_vi
+            head[int(i)] = plain if len(plain) <= n else plain[:n] + "…"
+    log(f"  phần đầu bài: {len(head)} tài liệu")
+    return ["" if str(u).endswith("_p0") else head.get(int(x), "") for x, u in zip(p["doc_id"], p["unit_id"])]
 
 
 def cmd_candidates(cfg, run_path, top=12, far=4, far_lo=50, far_hi=200, dup=0.6, seed=42, log=print):
@@ -268,16 +343,17 @@ def cmd_candidates(cfg, run_path, top=12, far=4, far_lo=50, far_hi=200, dup=0.6,
     st = {q: t for q, t in zip(src.index, src["text"])}
     near = [k != "source" and jaccard(t, st[q]) > dup for q, t, k in zip(p["qid"], p["text"], p["kind"])]
     p = p[~np.array(near)].reset_index(drop=True)
+    p["lead"] = leads(cfg, p, log)                                      # v2: teacher chấm cả tài liệu
     p.to_parquet(d / "pairs.parquet")
     log(f"→ {d / 'pairs.parquet'}: {len(p)} cặp, {p['qid'].nunique()} câu, bỏ {sum(near)} bản gần trùng nguồn; "
         f"{p['kind'].value_counts().to_dict()}; ngôn ngữ {p['lang'].value_counts().to_dict()}")
 
 
-def cmd_label(cfg, model, tp, shard="0/1", limit=0, log=print):
+def cmd_label(cfg, model, tp, shard="0/1", limit=0, level="unit", log=print):
     from vllm import SamplingParams
     d = sdir(cfg)
     p = pd.read_parquet(d / "pairs.parquet")
-    qd = Path(cfg["work_dir"]) / cfg["expand"]["out_dir"] / "synth"
+    qd = qdir(cfg)
     qs = {lg: dict(pd.read_parquet(qd / f"queries_{lg}.parquet")[["id", "query"]].itertuples(index=False))
           for lg in ("vi", "en", "zh")}
     k, n = (int(x) for x in shard.split("/"))
@@ -289,11 +365,18 @@ def cmd_label(cfg, model, tp, shard="0/1", limit=0, log=print):
     llm, tok = load_llm(model, tp, 3072, log)
     digits = {g: tok.convert_tokens_to_ids(str(g)) for g in (0, 1, 2)}
     prompts = []
+    if level == "doc" and "lead" not in p:
+        raise SystemExit("--level doc cần pairs.parquet có cột lead (chạy lại candidates bằng mã mới)")
     for r in p.itertuples():
         qx = f"\n(Bản dịch {LANG_NAME[r.lang]}: {qs[r.lang][r.qid]})" if r.lang in ("en", "zh") else ""
-        prompts.append(chat(tok, LABEL_PROMPT.format(q=qs["vi"][r.qid], qx=qx, lang=LANG_NAME.get(r.lang, r.lang),
-                                                     ctx=(r.ctx or "").strip(), text=cut(r.text, r.lang)),
-                            LABEL_SYSTEM))
+        if level == "doc":
+            prompts.append(chat(tok, LABEL_PROMPT_DOC.format(
+                q=qs["vi"][r.qid], qx=qx, lang=LANG_NAME.get(r.lang, r.lang), ctx=(r.ctx or "").strip(),
+                lead=r.lead or "(đoạn liên quan nhất là phần đầu bài)", text=cut(r.text, r.lang)), LABEL_SYSTEM_DOC))
+        else:
+            prompts.append(chat(tok, LABEL_PROMPT.format(q=qs["vi"][r.qid], qx=qx, lang=LANG_NAME.get(r.lang, r.lang),
+                                                         ctx=(r.ctx or "").strip(), text=cut(r.text, r.lang)),
+                                LABEL_SYSTEM))
     t0 = time.time()
     outs = llm.generate(prompts, SamplingParams(temperature=0.0, max_tokens=1, logprobs=20))
     dt = time.time() - t0
@@ -309,7 +392,7 @@ def cmd_label(cfg, model, tp, shard="0/1", limit=0, log=print):
     p["p0"], p["p1"], p["p2"] = P[:, 0], P[:, 1], P[:, 2]
     p["grade"] = p["p1"] + 2 * p["p2"]
     out = d / (f"labels-{k}of{n}.parquet" if n > 1 else "labels.parquet")
-    p.drop(columns=["ctx", "text"]).to_parquet(out)
+    p.drop(columns=["ctx", "text", "lead"], errors="ignore").assign(level=level).to_parquet(out)
     ntok = sum(len(o.prompt_token_ids) for o in outs)
     log(f"→ {out}: {len(p)} cặp trong {dt:.0f}s ({len(p) / dt:.2f} cặp/s, {ntok / dt:.0f} token/s); "
         f"không đọc được {int(miss.sum())}")
@@ -334,18 +417,26 @@ def main():
     ap.add_argument("--far", type=int, default=4)
     ap.add_argument("--shard", default="0/1")
     ap.add_argument("--tag", default="", help="sample/generate: đợt bổ sung (vd pm) → source_<tag>, gen_<tag>")
+    ap.add_argument("--variant", default="synth", help="synth = v1; synth2 = v2 (thư mục <work>/<variant>, qexp/<variant>)")
+    ap.add_argument("--style", default="none", choices=["none", "mix"],
+                    help="generate: mix = kiểu ngắn / vừa / dài theo phân bố độ dài câu thi (v2)")
+    ap.add_argument("--qa-cap", type=float, default=1.0, help="sample: tỉ lệ tối đa trang hỏi-đáp mỗi ngôn ngữ (v2: 0,3)")
+    ap.add_argument("--level", default="unit", choices=["unit", "doc"],
+                    help="label: unit = chấm đoạn (v1); doc = chấm cả tài liệu, tiêu chí chặt hơn (v2)")
     a = ap.parse_args()
+    global VARIANT
+    VARIANT = a.variant
     cfg = config.load(a.config)
     if a.cmd == "sample":
-        cmd_sample(cfg, a.n, a.tag)
+        cmd_sample(cfg, a.n, a.tag, a.qa_cap)
     elif a.cmd == "generate":
-        cmd_generate(cfg, a.model, a.tp, a.limit, a.tag)
+        cmd_generate(cfg, a.model, a.tp, a.limit, a.tag, a.style)
     elif a.cmd == "build":
         cmd_build(cfg)
     elif a.cmd == "candidates":
-        cmd_candidates(cfg, a.run or cfg.path("runs") / "synth_lin07.parquet", a.top, a.far)
+        cmd_candidates(cfg, a.run or cfg.path("runs") / f"{VARIANT}_lin07.parquet", a.top, a.far)
     else:
-        cmd_label(cfg, a.model, a.tp, a.shard, a.limit)
+        cmd_label(cfg, a.model, a.tp, a.shard, a.limit, a.level)
 
 
 if __name__ == "__main__":

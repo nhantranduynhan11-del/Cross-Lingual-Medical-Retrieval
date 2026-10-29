@@ -26,13 +26,13 @@ from . import config
 from .encode import unit_input
 
 
-def load_data(cfg, seed=42):
-    d = Path(cfg["work_dir"]) / "synth"
+def load_data(cfg, seed=42, variant="synth"):
+    d = Path(cfg["work_dir"]) / variant
     lab = pd.concat([pd.read_parquet(f) for f in sorted(d.glob("labels*.parquet"))], ignore_index=True)
     lab = lab.dropna(subset=["p0", "p1", "p2"]).drop_duplicates(["qid", "unit_id"])
     txt = pd.read_parquet(d / "pairs.parquet", columns=["qid", "unit_id", "ctx", "text"])
     lab = lab.merge(txt, on=["qid", "unit_id"])
-    qd = Path(cfg["work_dir"]) / cfg["expand"]["out_dir"] / "synth"
+    qd = Path(cfg["work_dir"]) / cfg["expand"]["out_dir"] / variant
     qs = {lg: dict(pd.read_parquet(qd / f"queries_{lg}.parquet")[["id", "query"]].itertuples(index=False))
           for lg in ("vi", "en", "zh")}
     lab["query"] = [qs[lg if lg in qs else "vi"][q] for q, lg in zip(lab["qid"], lab["lang"])]
@@ -171,10 +171,10 @@ def evaluate(m, dev, batch, log):
     return res
 
 
-def train(kind, cfg, out, device, size, lr, epochs, max_groups, beta, bce, log=print):
+def train(kind, cfg, out, device, size, lr, epochs, max_groups, beta, bce, variant="synth", log=print):
     torch = __import__("torch")
     rc = cfg["rerank"]
-    tr, dev, qtext = load_data(cfg)
+    tr, dev, qtext = load_data(cfg, variant=variant)
     groups = make_groups(tr, qtext, size)
     if max_groups:
         groups = groups[:max_groups]
@@ -240,11 +240,12 @@ def main():
     ap.add_argument("--max-groups", type=int, default=0)
     ap.add_argument("--beta", type=float, default=3.0, help="phân phối teacher = softmax(beta × điểm 0–2)")
     ap.add_argument("--bce", type=float, default=1.0)
+    ap.add_argument("--variant", default="synth", help="dữ liệu <work>/<variant> (synth = v1, synth2 = v2)")
     a = ap.parse_args()
     cfg = config.load(a.config)
     size = a.group or (16 if a.kind == "bge" else 8)
     lr = a.lr or (2e-5 if a.kind == "bge" else 1e-4)
-    train(a.kind, cfg, a.out, a.device, size, lr, a.epochs, a.max_groups, a.beta, a.bce)
+    train(a.kind, cfg, a.out, a.device, size, lr, a.epochs, a.max_groups, a.beta, a.bce, a.variant)
 
 
 if __name__ == "__main__":
