@@ -6,7 +6,8 @@ Lý do (nghiên cứu 29/10):
   - TREC NeuCLIR 2024 (tài liệu tiếng Trung): mọi run đứng đầu dùng LLM làm reranker tầng cuối; GPT-4 rerank sau mT5 tăng
     nDCG@20 0,582 → 0,650; gộp nhiều run chỉ thêm rất ít khi đã rerank.
   - TREC RAG 2024 (UMBRELA): đáp án do LLM chấm cho thứ hạng hệ thống khớp người chấm (Kendall τ 0,89–0,94) nhưng rộng tay
-    hơn người → đáp án private làm lại cho 1.200 câu × 3 ngôn ngữ gần như chắc có LLM chấm; giám khảo LLM khớp cách làm đó.
+    hơn người → đáp án private làm lại cho 1.200 câu × 3 ngôn ngữ nhiều khả năng có LLM chấm (chưa xác nhận); giám khảo LLM
+    khớp cách làm đó.
   - Fine-tune từ teacher (k8) thua ở public vì học sinh 4B học câu tổng hợp lệch; ở đây model lớn chấm thẳng câu thật.
   - Qwen3-Reranker cho P(yes) > 0,5 ở ~155 tài liệu/câu trong khi đáp án public TB 72 → điểm reranker phân biệt kém ở vùng
     hạng 50–250, đúng nơi autok cắt.
