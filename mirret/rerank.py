@@ -16,6 +16,7 @@ Kết quả: top-N theo điểm mới, nối thêm phần đuôi (hạng > N) c�
   <run>_<method>_sub (không đè run đủ 1.200 câu); --name đặt tên khác.
 """
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -59,13 +60,27 @@ def maxsim(q, d):
     return float(s.max(axis=1).sum() / len(q))
 
 
+def ft_base(path):
+    """Model gốc của một thư mục fine-tune (finetune_meta.json của mirret.finetune) hoặc None."""
+    p = Path(path) / "finetune_meta.json"
+    return json.loads(p.read_text(encoding="utf-8"))["base"] if p.exists() else None
+
+
 class CrossScorer:
-    def __init__(self, name, device="cuda:0", fp16=True, max_length=512):
+    def __init__(self, name, device="cuda:0", fp16=True, max_length=512, alpha=1.0):
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
         self.torch = torch
         self.tok = AutoTokenizer.from_pretrained(name)
-        self.model = AutoModelForSequenceClassification.from_pretrained(name).to(device).eval()
+        self.model = AutoModelForSequenceClassification.from_pretrained(name)
+        if alpha < 1 and ft_base(name):                 # WiSE-FT: θ = α·θ_ft + (1−α)·θ_gốc (giữ gần model gốc)
+            base = AutoModelForSequenceClassification.from_pretrained(ft_base(name)).state_dict()
+            with torch.no_grad():
+                for k, v in self.model.state_dict().items():
+                    if v.is_floating_point():
+                        v.mul_(alpha).add_(base[k], alpha=1 - alpha)
+            print(f"  bge: nội suy trọng số α = {alpha} với {ft_base(name)}")
+        self.model = self.model.to(device).eval()
         self.device = torch.device(device)
         if fp16 and self.device.type == "cuda":
             self.model.half()
@@ -104,7 +119,7 @@ class Qwen3Scorer:
     DEFAULT_INSTRUCT = "Given a web search query, retrieve relevant passages that answer the query"
     MED_INSTRUCT = "Given a Vietnamese medical question, retrieve passages that answer the question"
 
-    def __init__(self, name, device="cuda:0", fp16=True, max_length=768, instruct=None, lora=None):
+    def __init__(self, name, device="cuda:0", fp16=True, max_length=768, instruct=None, lora=None, alpha=1.0):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch = torch
@@ -114,7 +129,15 @@ class Qwen3Scorer:
         self.model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype).to(self.device).eval()
         if lora:                                    # adapter của mirret.finetune qwen → gộp vào trọng số (không chậm hơn)
             from peft import PeftModel
-            self.model = PeftModel.from_pretrained(self.model, lora).merge_and_unload().eval()
+            from peft.tuners.lora import LoraLayer
+            pm = PeftModel.from_pretrained(self.model, lora)
+            if alpha < 1:                           # WiSE-FT với LoRA: θ_gốc + α·ΔW = nhân hệ số LoRA với α
+                for m in pm.modules():
+                    if isinstance(m, LoraLayer):
+                        for k in m.scaling:
+                            m.scaling[k] *= alpha
+                print(f"  qwen: LoRA nhân α = {alpha}")
+            self.model = pm.merge_and_unload().eval()
         self.yes = self.tok.convert_tokens_to_ids("yes")
         self.no = self.tok.convert_tokens_to_ids("no")
         self.pre = self.tok.encode(self.PREFIX, add_special_tokens=False)
@@ -180,7 +203,8 @@ def rerank(cfg, df, method, device, log=print):
                 log(f"  {n + 1} câu hỏi, {(time.time() - t0) / (n + 1):.2f}s/câu")
     elif method in ("qwen3", "qwen3i"):
         sc = Qwen3Scorer(rc["qwen3_model"], device, True, rc["query_max_length"] + rc["doc_max_length"],
-                         Qwen3Scorer.MED_INSTRUCT if method == "qwen3i" else None, rc.get("qwen3_lora"))
+                         Qwen3Scorer.MED_INSTRUCT if method == "qwen3i" else None, rc.get("qwen3_lora"),
+                         float(rc.get("ft_alpha") or 1.0))
         npairs, t0 = 0, time.time()                         # không tính thời gian tải / nạp model
         for n, (q, g) in enumerate(df.groupby("qid", sort=True)):
             ids = g["unit_id"].tolist()
@@ -199,7 +223,7 @@ def rerank(cfg, df, method, device, log=print):
             dt = time.time() - t0
             log(f"  xong {n + 1} câu hỏi, {npairs} cặp: {dt / (n + 1):.2f}s/câu, {1000 * dt / npairs:.1f}ms/cặp")
     else:
-        sc = CrossScorer(rc["cross_model"], device, True, rc["doc_max_length"])
+        sc = CrossScorer(rc["cross_model"], device, True, rc["doc_max_length"], float(rc.get("ft_alpha") or 1.0))
         for n, (q, g) in enumerate(df.groupby("qid", sort=True)):
             ids = g["unit_id"].tolist()
             pairs = [(pick_query(qs, q, rows[u][0], rc["match_lang"])[0], unit_input(rows[u][1], rows[u][2]))

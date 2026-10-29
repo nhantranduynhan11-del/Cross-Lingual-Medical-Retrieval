@@ -260,7 +260,9 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                         "vd 'bge') → run <RUN>_crossft\n"
                         "QWEN_LORA = ''                       # adapter LoRA Qwen3 đã fine-tune (vd 'qwen') → run <RUN>_qwen3ift\n"
                         "PUBMED_ONLY = False                  # True: chỉ chấm đoạn bài PubMed (model ft dùng riêng cho tiếng "
-                        "Anh) → run <RUN>_<method>ftpm, không ensemble / bài nộp",
+                        "Anh) → run <RUN>_<method>ftpm, không ensemble / bài nộp\n"
+                        "FT_ALPHA = 1.0                       # WiSE-FT: < 1 kéo model ft về gần model gốc (0,5 = nửa đường) "
+                        "→ tên run ft50",
                "('chunks', 'qtrans')"),
     code('''
 # (2) Xếp hạng lại trên 2 GPU (chia theo câu hỏi), ghi vào /kaggle/working/runs
@@ -307,7 +309,9 @@ if QWEN_LORA:
     K.set({'rerank.qwen3_lora': locate_model(QWEN_LORA)})
     sh('python -m pip install -q peft'); sh('python -m pip uninstall -y -q torchao')   # peft mới đòi torchao > 0.16, Kaggle có 0.10, không dùng tới
 assert not any(FT.get(m) for m in REUSE), 'model đã fine-tune: không dùng lại điểm cũ của phương pháp đó (bỏ khỏi REUSE)'
-TAG = lambda m: f'{RUN}_{m}{"ft" * FT.get(m, False)}{"pm" * PUBMED_ONLY}{DEPTH}{sfx}'
+K.set({'rerank.ft_alpha': FT_ALPHA})
+FTN = 'ft' + (str(round(FT_ALPHA * 100)) if FT_ALPHA < 1 else '')   # vd ft50 với FT_ALPHA = 0,5
+TAG = lambda m: f'{RUN}_{m}{FTN * FT.get(m, False)}{"pm" * PUBMED_ONLY}{DEPTH}{sfx}'
 PM = ' --pubmed-only' if PUBMED_ONLY else ''
 assert not (PUBMED_ONLY and ENSEMBLE), 'PUBMED_ONLY: tắt ENSEMBLE (ghép trên máy bằng tools/en_reorder.py)'
 for m in METHODS:
@@ -322,10 +326,10 @@ ENS = []
 if ENSEMBLE:
     assert 'cross' in METHODS and 'qwen3i' in METHODS, 'ENSEMBLE cần METHODS có cả cross và qwen3i'
     sh(f'python -m mirret.ensemble --base {RUNS_IN}/{RUN}.parquet --bge {OUT}/{TAG("cross")}.parquet '
-       f'--qwen {OUT}/{TAG("qwen3i")}.parquet --top-n {TOP_N} --out {OUT} --suffix i{"ft" * any(FT.values())}{DEPTH}{sfx}', 'ensemble')
+       f'--qwen {OUT}/{TAG("qwen3i")}.parquet --top-n {TOP_N} --out {OUT} --suffix i{FTN * any(FT.values())}{DEPTH}{sfx}', 'ensemble')
     for f in glob.glob(f'{OUT}/{RUN}_ip0[68]i*'):                # ensemble.py ghi thêm hai run nội suy — không dùng
         os.remove(f)
-    ENS = [f'{RUN}_ensi{"ft" * any(FT.values())}{DEPTH}']
+    ENS = [f'{RUN}_ensi{FTN * any(FT.values())}{DEPTH}']
 '''),
     code('''
 # (3) Bài nộp: run gộp (không rerank) + từng run đã rerank. Run thử trên bộ nhãn (QIDS) thì không nộp.

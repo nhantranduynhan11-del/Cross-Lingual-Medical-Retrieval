@@ -139,6 +139,7 @@ rerank:
   cross_model: "BAAI/bge-reranker-v2-m3"
   qwen3_model: "Qwen/Qwen3-Reranker-4B"  # method qwen3 (instruction mặc định của model) | qwen3i (instruction y khoa)
   qwen3_lora: null                       # adapter LoRA của mirret.finetune qwen (k5: QWEN_LORA); null = model gốc
+  ft_alpha: 1.0                          # WiSE-FT: 1 = model fine-tune, 0,5 = nửa đường về model gốc (k5: FT_ALPHA)
   qwen3_batch_tokens: 8192               # 4B trên T4 fp16: nhỏ hơn bge để vừa bộ nhớ
   top_n: 400                             # F2 tính theo TẬP → xếp hạng lại chỉ có ích khi top_n > k_chunk
   match_lang: true                       # đoạn zh chấm bằng câu hỏi zh, đoạn en bằng câu en (thiếu bản dịch → câu vi)
