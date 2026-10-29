@@ -253,6 +253,8 @@ def main():
     ap.add_argument("--reuse", nargs="*", default=None,
                     help="run đã rerank bằng cùng phương pháp (vd runs/lin07_qwen3i_1200.parquet): dùng lại điểm các cặp "
                          "(câu, đoạn) đã chấm, chỉ chấm cặp mới")
+    ap.add_argument("--reuse-check", type=int, default=64,
+                    help="--reuse: chấm lại N cặp dùng lại để kiểm điểm khớp model hiện tại (0 = tắt)")
     ap.add_argument("--pubmed-only", action="store_true",
                     help="chỉ chấm đoạn của bài PubMed (model fine-tune dùng riêng cho tiếng Anh); run kết quả không có "
                          "phần đuôi, chỉ gồm các đoạn PubMed đã chấm")
@@ -288,7 +290,21 @@ def main():
             old = df[hit].drop(columns="score").merge(cache.reset_index(), on=["qid", "unit_id"])
             reused = len(old)
             print(f"  --reuse: dùng lại {reused}/{len(df)} cặp ({reused / max(1, len(df)):.0%}), chấm mới {int((~hit).sum())}")
-            new = rerank(cfg, df[~hit], method, a.device) if (~hit).any() else df.iloc[:0]
+            # kiểm chéo: chấm lại một mẫu cặp đã dùng lại (cùng lượt với cặp mới, không nạp model 2 lần) — điểm phải
+            # khớp; lệch = run trong REUSE đến từ model / instruction / bản dịch khác → dừng thay vì trộn điểm sai
+            chk = df[hit].sample(n=min(a.reuse_check, int(hit.sum())), random_state=si) if a.reuse_check else df.iloc[:0]
+            todo = pd.concat([df[~hit], chk.assign(_chk=True)], ignore_index=True)
+            scored = rerank(cfg, todo.drop(columns="_chk", errors="ignore"), method, a.device) if len(todo) else df.iloc[:0]
+            if len(chk):
+                cmp = chk[["qid", "unit_id"]].merge(scored[["qid", "unit_id", "score"]], on=["qid", "unit_id"]).merge(
+                    cache.rename("cached").reset_index(), on=["qid", "unit_id"])
+                diff = float((cmp["score"] - cmp["cached"]).abs().max())
+                tol = {"cross": 0.1, "colbert": 0.01}.get(method, 0.02)   # logit bge / maxsim / P(yes) Qwen
+                print(f"  --reuse: kiểm chéo {len(cmp)} cặp dùng lại, lệch tối đa {diff:.4f} (ngưỡng {tol})")
+                if diff > tol:
+                    raise RuntimeError(f"điểm trong REUSE không khớp model hiện tại (lệch {diff:.3f} > {tol}): kiểm các "
+                                       f"run {a.reuse} có đúng phương pháp {method}, cùng model / instruction không")
+            new = scored.merge(df[~hit][["qid", "unit_id"]], on=["qid", "unit_id"]) if len(scored) else scored
             cols = ["qid", "unit_id", "doc_id", "rank", "score"]
             res = runs.rerank_by_score(pd.concat([old[cols], new[cols]], ignore_index=True))
         else:
