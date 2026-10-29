@@ -253,6 +253,9 @@ def main():
     ap.add_argument("--reuse", nargs="*", default=None,
                     help="run đã rerank bằng cùng phương pháp (vd runs/lin07_qwen3i_1200.parquet): dùng lại điểm các cặp "
                          "(câu, đoạn) đã chấm, chỉ chấm cặp mới")
+    ap.add_argument("--pubmed-only", action="store_true",
+                    help="chỉ chấm đoạn của bài PubMed (model fine-tune dùng riêng cho tiếng Anh); run kết quả không có "
+                         "phần đuôi, chỉ gồm các đoạn PubMed đã chấm")
     a = ap.parse_args()
     cfg = config.load(a.config)
     rc = cfg["rerank"]
@@ -275,6 +278,9 @@ def main():
     if not part.exists() or a.force:
         mine = [q for k, q in enumerate(sorted(base["qid"].unique())) if k % sn == si]
         df = base[base["qid"].isin(mine) & (base["rank"] <= top_n)]
+        if a.pubmed_only:
+            df = df[df["doc_id"].isin(runs.pubmed_ids(cfg))]
+            print(f"  --pubmed-only: {len(df)} đoạn PubMed ({df['qid'].nunique()} câu)")
         reused = 0
         if a.reuse:
             cache = reuse_scores(a.reuse, top_n, set(mine))
@@ -294,7 +300,7 @@ def main():
     parts = sorted(part_dir.glob(f"part-*-of-{sn}.parquet"))
     if len(parts) == sn:
         rr = pd.concat([runs.read(p) for p in parts], ignore_index=True)
-        runs.write(with_tail(rr, base, top_n), final, {"run": str(run_path), "method": method, "top_n": top_n,
+        runs.write(rr if a.pubmed_only else with_tail(rr, base, top_n), final, {"run": str(run_path), "method": method, "top_n": top_n,
                                                       "parts": sn, "qids": len(qids) if qids else "all",
                                                       "tail": "run gốc, hạng > top_n"})
         print(f"đủ {sn} phần → {final}")

@@ -258,7 +258,9 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
                         "SUBMIT_RUN = True                    # False: không nộp RUN chưa rerank (chỉ nộp run đã rerank)\n"
                         "CROSS_MODEL = ''                     # model bge đã fine-tune (thư mục có finetune_meta.json trong Input, "
                         "vd 'bge') → run <RUN>_crossft\n"
-                        "QWEN_LORA = ''                       # adapter LoRA Qwen3 đã fine-tune (vd 'qwen') → run <RUN>_qwen3ift",
+                        "QWEN_LORA = ''                       # adapter LoRA Qwen3 đã fine-tune (vd 'qwen') → run <RUN>_qwen3ift\n"
+                        "PUBMED_ONLY = False                  # True: chỉ chấm đoạn bài PubMed (model ft dùng riêng cho tiếng "
+                        "Anh) → run <RUN>_<method>ftpm, không ensemble / bài nộp",
                "('chunks', 'qtrans')"),
     code('''
 # (2) Xếp hạng lại trên 2 GPU (chia theo câu hỏi), ghi vào /kaggle/working/runs
@@ -305,15 +307,17 @@ if QWEN_LORA:
     K.set({'rerank.qwen3_lora': locate_model(QWEN_LORA)})
     sh('python -m pip install -q peft'); sh('python -m pip uninstall -y -q torchao')   # peft mới đòi torchao > 0.16, Kaggle có 0.10, không dùng tới
 assert not any(FT.get(m) for m in REUSE), 'model đã fine-tune: không dùng lại điểm cũ của phương pháp đó (bỏ khỏi REUSE)'
-TAG = lambda m: f'{RUN}_{m}{"ft" * FT.get(m, False)}{DEPTH}{sfx}'
+TAG = lambda m: f'{RUN}_{m}{"ft" * FT.get(m, False)}{"pm" * PUBMED_ONLY}{DEPTH}{sfx}'
+PM = ' --pubmed-only' if PUBMED_ONLY else ''
+assert not (PUBMED_ONLY and ENSEMBLE), 'PUBMED_ONLY: tắt ENSEMBLE (ghép trên máy bằng tools/en_reorder.py)'
 for m in METHODS:
     RU = REUSE.get(m) or []
     RA = ' --reuse ' + ' '.join(run_path(x) for x in ([RU] if isinstance(RU, str) else RU)) if RU else ''
     par([f'CUDA_VISIBLE_DEVICES={g} python -m mirret.rerank --config {K.cfg} --run {RUNS_IN}/{RUN}.parquet '
-         f'--method {m} --top-n {TOP_N} --shard {g}/2 --device cuda:0 --out {OUT} --name {TAG(m)}{QARG}{RA}'
+         f'--method {m} --top-n {TOP_N} --shard {g}/2 --device cuda:0 --out {OUT} --name {TAG(m)}{QARG}{RA}{PM}'
          for g in range(2)], f'rerank_{m}')
     sh(f'python -m mirret.rerank --config {K.cfg} --run {RUNS_IN}/{RUN}.parquet --method {m} --top-n {TOP_N} '
-       f'--shard 0/2 --out {OUT} --name {TAG(m)}{QARG}{RA}')          # gộp 2 phần
+       f'--shard 0/2 --out {OUT} --name {TAG(m)}{QARG}{RA}{PM}')      # gộp 2 phần
 ENS = []
 if ENSEMBLE:
     assert 'cross' in METHODS and 'qwen3i' in METHODS, 'ENSEMBLE cần METHODS có cả cross và qwen3i'
@@ -339,7 +343,7 @@ if CHUNK_PROBS:
         hq = sorted(glob.glob(f'{KAGGLE}/input/**/{CALIB_QIDS}', recursive=True), key=len)
         assert hq, f'Không thấy {CALIB_QIDS} trong /kaggle/input'
         CPARG += f' --chunk-calib {CHUNK_CALIB} --calib-qids {hq[0]}'
-for name in ([] if QIDS else [RUN] * SUBMIT_RUN + NAMES[1:] + [TAG(m) for m in METHODS] + ENS):
+for name in ([] if QIDS or PUBMED_ONLY else [RUN] * SUBMIT_RUN + NAMES[1:] + [TAG(m) for m in METHODS] + ENS):
     for mpd in MAX_PER_DOC:
         for cp in sorted({'', CPARG}):                    # CHUNK_PROBS → cả bài thường (185 đoạn) lẫn bài _cbud
             sh(f'python -m mirret.submit --config {K.cfg} --run {OUT}/{name}.parquet --k-doc {K_DOC} '
