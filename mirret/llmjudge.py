@@ -69,7 +69,11 @@ def cmd_label(cfg, model, tp, shard, part, max_len=3072, limit=0, batch_q=20, lo
     mine, ptag = split(p["qid"].unique(), part)
     qids = sorted(mine)[:limit] if limit else sorted(mine)
     qs = query_texts(cfg)
-    todo = [b for b in range(0, len(qids), batch_q) if not (d / f"labels-{tag}-{ptag}-b{b // batch_q:03d}.parquet").exists()]
+
+    def done(b):                                      # lô đã chấm ĐỦ câu (file của lượt LIMIT nhỏ hơn lô → chấm lại)
+        f = d / f"labels-{tag}-{ptag}-b{b // batch_q:03d}.parquet"
+        return f.exists() and set(pd.read_parquet(f, columns=["qid"])["qid"]) == set(qids[b:b + batch_q])
+    todo = [b for b in range(0, len(qids), batch_q) if not done(b)]
     log(f"phần {tag}-{ptag}: {len(qids)} câu, {len(range(0, len(qids), batch_q))} lô, còn {len(todo)} lô chưa chấm")
     llm, tok = synth.load_llm(model, tp, max_len, log) if todo else (None, None)
     t_all, n_new, q_new = time.time(), 0, 0

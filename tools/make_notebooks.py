@@ -830,19 +830,19 @@ hợp luật suy luận) chấm 0/1/2 cả tài liệu (prompt như teacher v2, 
 huấn luyện gì; model > 14B không dùng ở đây. Ghép trên máy: `tools/merge_judge.py` → `span_chunks.py`.
 **Chia việc:** tài khoản i (0…n−1) đặt `SHARD = 'i/n'` — mọi tài khoản cùng `HI`, `QIDS`. Trong tài khoản: 2 tiến trình,
 mỗi GPU một bản model (`TP = 1`). Hết RAM GPU khi nạp → `TP = 2` (một tiến trình, chậm hơn ~30%).
-**Bước 1 — đo tốc độ (~15 phút):** `LIMIT = 4` → log in `cặp/s` của mỗi GPU. Thời gian cả phần ≈
-1200 × HI / (2 × n × cặp/s) giây (vd 1,1 cặp/s, HI 250, n 6 → 6,3 giờ). Quá 10 giờ → giảm `HI` (200) hoặc tăng n.
-**Bước 2:** `LIMIT = 0`, *Save Version → Save & Run All*. Mỗi lô 20 câu ghi một file ngay → phiên bị dừng vẫn giữ phần đã
+**Tốc độ đo 29/10 (`LIMIT = 4`):** 1,19 cặp/s mỗi GPU (~800 token/cặp) → cả phần ≈ 1200 × HI / (2 × n × 1,19) giây =
+**~5,8 giờ** với HI 250, n 6 (cộng ~20 phút cài đặt + nạp model). Đo lại: `LIMIT = 4` (~15 phút).
+**Chạy:** `LIMIT = 0`, *Save Version → Save & Run All*; không cần thêm output của lượt đo làm Input. Mỗi lô 20 câu ghi một file ngay → phiên bị dừng vẫn giữ phần đã
 chấm: chạy lại với output cũ làm Input, các lô đã có được bỏ qua.
 **Đầu ra:** `judge/labels-<phần>-<GPU>-b<lô>.parquet` (vài MB) → tải về `results/judge_<i>/`.
 {VLLM_NOTE}
 """),
-    setup_cell("k10-v1", "SHARD = '0/6'                        # tài khoản i trong n: '0/6' … '5/6'\n"
+    setup_cell("k10-v2","SHARD = '0/6'                        # tài khoản i trong n: '0/6' … '5/6'\n"
                          "HI = 250                             # số tài liệu đầu mỗi câu được chấm\n"
                          "QIDS = ''                            # '' = cả 1.200 câu; 'public600_a.txt' = chỉ các câu đó\n"
                          "MODEL = 'Qwen/Qwen3-14B-AWQ'\n"
                          "TP = 1                               # 1 = mỗi GPU một bản model; 2 = một bản trên 2 GPU\n"
-                         "LIMIT = 4                            # >0: N câu đầu mỗi GPU (đo tốc độ); 0 = cả phần\n"
+                         "LIMIT = 0                            # >0: N câu đầu mỗi GPU (đo tốc độ); 0 = cả phần\n"
                          "VLLM_SPEC = 'vllm==0.9.2'            # PyTorch 2.7 (CUDA 12.x), T4 chạy engine V0", "('chunks', 'qtrans')"),
     code('''
 # (2) Cặp (câu, tài liệu) của phần này (CPU: đọc đoạn cha + phần đầu bài trong kho); nhãn cũ trong Input → bỏ qua lô đã có
