@@ -223,7 +223,10 @@ def rerank(cfg, df, method, device, log=print):
             dt = time.time() - t0
             log(f"  xong {n + 1} câu hỏi, {npairs} cặp: {dt / (n + 1):.2f}s/câu, {1000 * dt / npairs:.1f}ms/cặp")
     else:
-        sc = CrossScorer(rc["cross_model"], device, True, rc["doc_max_length"], float(rc.get("ft_alpha") or 1.0))
+        if method == "medcpt":                  # MedCPT-Cross-Encoder (NCBI 2023, nhật ký PubMed): chỉ hợp bài tiếng Anh
+            sc = CrossScorer(rc.get("medcpt_cross_model") or "ncbi/MedCPT-Cross-Encoder", device, True, 512)
+        else:
+            sc = CrossScorer(rc["cross_model"], device, True, rc["doc_max_length"], float(rc.get("ft_alpha") or 1.0))
         for n, (q, g) in enumerate(df.groupby("qid", sort=True)):
             ids = g["unit_id"].tolist()
             pairs = [(pick_query(qs, q, rows[u][0], rc["match_lang"])[0], unit_input(rows[u][1], rows[u][2]))
@@ -266,7 +269,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--run", required=True)
-    ap.add_argument("--method", default=None, choices=[None, "colbert", "cross", "qwen3", "qwen3i"])
+    ap.add_argument("--method", default=None, choices=[None, "colbert", "cross", "qwen3", "qwen3i", "medcpt"],
+                    help="medcpt = MedCPT-Cross-Encoder, dùng với --pubmed-only (câu hỏi tiếng Anh theo match_lang)")
     ap.add_argument("--top-n", type=int, default=None)
     ap.add_argument("--shard", default="0/1", help="i/N theo câu hỏi (mỗi GPU một phần)")
     ap.add_argument("--device", default="cuda:0")
@@ -323,7 +327,7 @@ def main():
                 cmp = chk[["qid", "unit_id"]].merge(scored[["qid", "unit_id", "score"]], on=["qid", "unit_id"]).merge(
                     cache.rename("cached").reset_index(), on=["qid", "unit_id"])
                 diff = float((cmp["score"] - cmp["cached"]).abs().max())
-                tol = {"cross": 0.1, "colbert": 0.01}.get(method, 0.02)   # logit bge / maxsim / P(yes) Qwen
+                tol = {"cross": 0.1, "medcpt": 0.1, "colbert": 0.01}.get(method, 0.02)   # logit / maxsim / P(yes)
                 print(f"  --reuse: kiểm chéo {len(cmp)} cặp dùng lại, lệch tối đa {diff:.4f} (ngưỡng {tol})")
                 if diff > tol:
                     raise RuntimeError(f"điểm trong REUSE không khớp model hiện tại (lệch {diff:.3f} > {tol}): kiểm các "
