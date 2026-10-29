@@ -40,7 +40,10 @@ def main():
         raise SystemExit(f"LỖI ({len(errs)}): {errs[:5]}")
     js, zp = submit.write(sub, a.out, a.name)
     n = sum(q in qs for q in base)
-    print(f"thay {n} câu từ {a.over}; → {zp} ({zp.stat().st_size / 1e6:.1f} MB)")
+    mb = zp.stat().st_size / 1e6
+    print(f"thay {n} câu từ {a.over}; → {zp} ({mb:.1f} MB)")
+    if mb > cfg["submit"]["max_zip_mb"]:
+        print(f"CẢNH BÁO: file nén {mb:.1f} MB > submit.max_zip_mb {cfg['submit']['max_zip_mb']} MB — giảm --per-query của --over")
     (Path(a.out) / f"{a.name}_meta.json").write_text(json.dumps(vars(a), indent=1, ensure_ascii=False), encoding="utf-8")
 
 
