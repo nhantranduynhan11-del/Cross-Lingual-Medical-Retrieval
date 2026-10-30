@@ -149,7 +149,7 @@ def main():
     lang = dict(zip([int(i) for i in t["id"]], t["lang"]))
     # điểm P(yes): mọi đơn vị đã chấm (run gộp có thể > 400 đơn vị; phần đuôi có điểm âm nên bị lọc)
     r = runs.read(a.probs)
-    r = r[(r["score"] >= 0) & (r["score"] <= 1)]
+    r = r[(r["score"] >= 0) & (r["score"] <= 1) & ~r["doc_id"].isin(pm)]   # bỏ PubMed: Σp như run _np của bài public
     pdoc = r.groupby(["qid", "doc_id"])["score"].max()
     cands, probs = {}, {}
     for q, lst in anchors.items():                            # phân bổ chỉ cần doc_id + P(yes), chưa cần chữ
