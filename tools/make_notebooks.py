@@ -237,7 +237,7 @@ k_chunk (F2 tính theo TẬP: xếp hạng lại trong đúng tập nộp không
 **Thử trên bộ nhãn:** thêm file danh sách câu (vd `queries.csv`) làm Input, đặt `QIDS = 'queries.csv'` → chỉ rerank các câu
 đó, ra `runs/<run>_<method>_sub.parquet`, không tạo bài nộp. bge top-400 ~6 s/câu/GPU (đo 19/10).
 """),
-    setup_cell("k5-v10","RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
+    setup_cell("k5-v15","RUN = 'rrf9_w'                     # baseline: rrf9_w + cross (đánh giá 19/10)\n"
                         "METHODS = ['cross']                  # thêm 'colbert' nếu muốn so sánh; [] = chỉ nộp RUN có sẵn\n"
                         "TOP_N = 400\nK_DOC, K_CHUNK = 200, 185\n"
                         "QIDS = ''                            # thử trên bộ nhãn: 'queries.csv' (tìm trong /kaggle/input) "
